@@ -2,6 +2,14 @@ name: deploy
 on:
   push:
     branches: [main]
+    # A deny-list, not an allow-list: anything not named here deploys. A new file that ships
+    # is covered by default, so the failure mode is a redundant deploy, never a skipped one.
+    paths-ignore:
+      - '**.md'
+      - LICENSE
+      - .gitignore
+      - Taskfile.yml
+      - .github/**
   workflow_dispatch:
 permissions:
   contents: read

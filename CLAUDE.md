@@ -94,6 +94,11 @@ Hazards, each of which has cost time:
   unchanged expression keeps firing across deploys, so this only bites on the first slot of
   a new one.
 
+- **A push touching only docs, `LICENSE`, `Taskfile.yml`, or `.github/` does not deploy.**
+  `deploy.yml` carries a `paths-ignore` deny-list, so anything unnamed there still deploys and
+  a new shipping file is covered without being added. `check` still runs on every push. Use
+  `workflow_dispatch` to force a deploy.
+
 - **`wrangler types` regenerates from `wrangler.jsonc`.** Change a binding without rerunning
   it and tsc checks against a stale `Env`.
 - **npm 11 gates package install scripts.** A fresh clone needs
