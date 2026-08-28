@@ -10,7 +10,9 @@
     "skipLibCheck": true,
     "types": ["node"],
     "isolatedModules": true,
+    // schedules/index.ts imports its leaves with .ts, so node can load it directly.
+    "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src", "test", "worker-configuration.d.ts"]
+  "include": ["schedules", "src", "test", "worker-configuration.d.ts"]
 }

@@ -42,16 +42,29 @@ Once, by hand.
 
 Push to `main` deploys. The checks run on every push without either secret.
 
-## Changing the target list
+## Changing what runs
 
-A target is a repo, a workflow file and a cron, in `TARGETS` in `src/targets.ts`. The same
-cron string must also be a trigger in `triggers.crons` in `wrangler.jsonc` -- one file
-without the other and nothing runs.
+One file per GitHub repo in `schedules/`, named for the half of `owner/name` after the
+slash. It lists that repo's workflows and the cron each one runs on:
+
+```ts
+// schedules/ctan.ts
+export default {
+  repo: "jshvn/ctan",
+  workflows: [{ workflow: "sync.yml", cron: "42 * * * *" }],
+}
+```
+
+`schedules/index.ts` imports every one of them. Bundling is static, so there is no glob and
+a file the registry omits never runs.
+
+Cloudflare needs those same cron strings in `wrangler.jsonc`, which is JSON and cannot
+import them. `task crons` writes them there; `task check` fails until it has been run.
 
 To add one:
 
-- Add the entry to `src/targets.ts`, and its cron to `wrangler.jsonc` character for
-  character.
+- Write `schedules/<name>.ts` and add its import to `schedules/index.ts`.
+- `task crons`.
 - Install the App on that repo.
 - Check three things in the target's own workflow. Nothing here can, and a target failing
   any of them is dispatched into silence:
@@ -59,13 +72,13 @@ To add one:
   - a `concurrency` group with `cancel-in-progress: false`, so a retried dispatch queues
     instead of doubling the work.
   - a healthcheck ping. This repo never learns whether a run passed.
-- `task check`, which asserts the two files agree, then push to `main`.
+- `task check`, then push to `main`.
 
 To remove one:
 
-- Delete its entry from `src/targets.ts`.
-- Delete its cron from `wrangler.jsonc`, unless another target claims that exact string.
-- Give that workflow a `schedule:` of its own. This list was its only clock.
+- Delete `schedules/<name>.ts` and its import from `schedules/index.ts`.
+- `task crons`.
+- Give that workflow a `schedule:` of its own. `schedules/` was its only clock.
 - `task check`, then push to `main`.
 
 ## Day to day
@@ -74,6 +87,7 @@ To remove one:
 
 - `task check` -- everything CI runs: types, format, tests, dry-run deploy.
 - `task targets` -- what gets dispatched, and when.
+- `task crons` -- write `wrangler.jsonc`'s triggers from `schedules/`.
 - `task runs` -- recent runs of each target on GitHub.
 - `task instances` -- the Cloudflare side, one instance per cron that fired.
 - `task inspect` -- one instance's steps, retries and errors. `ID=<id>`, default latest.
@@ -93,7 +107,7 @@ It dispatches for real. Without the JSON the instance has no cron to look up and
 
 - Cloudflare parses the crons; this repo only looks up strings, so `0 * * * *` and
   `0 */1 * * *` are different keys.
-- The free plan allows 5 cron expressions per Cloudflare account. Targets sharing an
-  expression share a trigger.
+- The free plan allows 5 cron expressions per Cloudflare account, shared by every Worker on
+  it. Targets sharing an expression share a trigger, and a test holds the count at 5.
 - A newly added cron takes up to 15 minutes to propagate, so its first slot may be missed.
   Existing expressions keep firing across deploys.

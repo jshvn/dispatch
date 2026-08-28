@@ -8,10 +8,10 @@ version: '3'
 vars:
   # The Workflow's name in wrangler.jsonc. Wrangler addresses instances by it.
   NAME: dispatch
-  # The target list, read out of src/targets.ts itself so nothing here can drift from it.
+  # The target list, read out of schedules/ itself so nothing here can drift from it.
   # Node imports the TypeScript directly (type stripping), so there is no build step.
   TARGETS: >-
-    node -e 'const {TARGETS} = await import("./src/targets.ts");
+    node -e 'const {TARGETS} = await import("./schedules/index.ts");
     for (const t of TARGETS) console.log([t.cron, t.repo, t.workflow].join("\t"))'
 
 tasks:
@@ -29,13 +29,15 @@ tasks:
           "" \
           "${c}day to day${r}" \
           "  task check        Everything CI runs: types, format, tests, dry-run deploy" \
-          "  task targets      What gets dispatched and when, read from src/targets.ts" \
+          "  task targets      What gets dispatched and when, read from schedules/" \
+          "  task crons        Write wrangler.jsonc's triggers from schedules/" \
+          "                    ${d}run after adding or changing a cron; task check fails until you do${r}" \
           "  task runs         Recent runs of each target on GitHub" \
           "                    ${d}every run should say 'workflow_dispatch'; that is this Worker${r}" \
           "  task format       Fix formatting in place ${d}(biome check --write)${r}" \
           "" \
           "${c}pieces of check${r}" \
-          "  task test         vitest -- asserts wrangler.jsonc and src/targets.ts agree" \
+          "  task test         vitest -- asserts wrangler.jsonc matches schedules/" \
           "  task typecheck    wrangler types && tsc --noEmit" \
           "" \
           "${c}cloudflare -- needs wrangler credentials${r}" \
@@ -67,7 +69,7 @@ tasks:
       - npx wrangler deploy --dry-run
 
   test:
-    desc: vitest - the cron strings in wrangler.jsonc and src/targets.ts agree
+    desc: vitest - wrangler.jsonc's triggers are what schedules/ generates
     cmds: [npm test]
 
   typecheck:
@@ -78,8 +80,28 @@ tasks:
     desc: Fix formatting in place - biome check --write, no lint rules are enabled
     cmds: [npm run format:fix]
 
+  # wrangler.jsonc is JSON: it cannot import schedules/, so the crons have to be copied into
+  # it. This is the copy. test/schedules.test.ts is what fails until it has been run.
+  crons:
+    desc: Write wrangler.jsonc's cron triggers from schedules/ - run after changing one
+    silent: true
+    cmds:
+      - |
+        node -e 'const {readFileSync, writeFileSync} = await import("node:fs");
+        const {crons} = await import("./schedules/index.ts");
+        const file = "wrangler.jsonc", before = readFileSync(file, "utf8");
+        // ponytail: rewrites the first "crons" array in the file. No cron contains "]", and
+        // there is only one such key; a second would be left alone without a word.
+        const at = /("crons"\s*:\s*)\[[^\]]*\]/;
+        if (!at.test(before)) throw new Error(`no crons array in ${file}`);
+        // Written in the style the file is kept in by hand -- biome.json does not cover
+        // wrangler.jsonc, so nothing else will format this line.
+        const array = `[${crons().map((c) => JSON.stringify(c)).join(", ")}]`;
+        writeFileSync(file, before.replace(at, (_, key) => key + array));
+        for (const c of crons()) console.log(c)'
+
   targets:
-    desc: What gets dispatched and when, read from src/targets.ts
+    desc: What gets dispatched and when, read from schedules/
     silent: true
     cmds:
       - |

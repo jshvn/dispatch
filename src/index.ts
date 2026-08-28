@@ -12,8 +12,8 @@
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers"
 import { NonRetryableError } from "cloudflare:workflows"
+import { selectTargets } from "../schedules"
 import { appJwt, dispatchWorkflow, installationToken, isFatal } from "./github"
-import { instanceId, selectTargets } from "./targets"
 
 /** What `scheduled` hands the instance. The cron string is the whole lookup key. */
 export type Params = {
@@ -49,9 +49,9 @@ export class Dispatch extends WorkflowEntrypoint<Env, Params> {
     if (!cron) throw new Error("instance carried no cron; only the scheduled handler creates these")
 
     const targets = selectTargets(cron)
-    // wrangler.jsonc and targets.ts disagree. The tests catch this before deploy; if it
+    // wrangler.jsonc and schedules/ disagree. The tests catch this before deploy; if it
     // reaches production, failing loudly beats a schedule that silently does nothing.
-    if (targets.length === 0) throw new Error(`no target in targets.ts claims cron "${cron}"`)
+    if (targets.length === 0) throw new Error(`no target in schedules/ claims cron "${cron}"`)
 
     const dispatched: string[] = []
     for (const target of targets) {
@@ -77,6 +77,28 @@ export class Dispatch extends WorkflowEntrypoint<Env, Params> {
     return { cron, scheduledTime: event.payload.scheduledTime, dispatched }
   }
 }
+
+/**
+ * The instance id for one firing. Deterministic, so a slot that Cloudflare invokes twice
+ * asks for an id that already exists instead of dispatching twice. The cron belongs in the
+ * id because two expressions can match the same minute.
+ *
+ * Cloudflare allows `[A-Za-z0-9_-]`. Every character outside that set becomes `_` and two
+ * hex digits -- including `_` itself, so nothing but an escape can produce one and distinct
+ * crons keep distinct ids whatever they contain. Escaping by code point rather than by a
+ * table of the characters cron is known to use is what keeps that true: it needs no claim
+ * about which spellings Cloudflare accepts, and it leaves case alone, so two expressions
+ * differing only in case stay two expressions here as they do everywhere else.
+ *
+ * ponytail: the escape expands, so a long enough list cron would pass Cloudflare's
+ * 100-character id limit and be rejected at `createBatch`. The tests assert the configured
+ * crons are inside it; a longer one would want a hash here instead.
+ */
+export const instanceId = (cron: string, scheduledTime: number): string =>
+  `${scheduledTime}-${cron.replace(
+    /[^A-Za-z0-9-]/g,
+    (c) => `_${c.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  )}`
 
 export default {
   // One instance per firing, under an id derived from the slot. `createBatch` rather than

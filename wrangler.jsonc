@@ -6,8 +6,9 @@
 // and `wrangler deploy` refuses them on the free plan. The ceiling here is 5 cron
 // expressions per Cloudflare account, against 100 for the paid-only kind.
 //
-// Every cron below must appear verbatim on a target in src/targets.ts, and every target's
-// cron must appear below. test/dispatch.test.ts asserts both and prints the array to paste.
+// triggers.crons is generated: `task crons` writes it from schedules/, which is where the
+// expressions are actually decided. This file is JSON and cannot import them, so they are
+// copied here; test/schedules.test.ts fails until the copy matches. Do not edit it by hand.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "dispatch",
@@ -17,7 +18,7 @@
   // wrangler requires a default export, and this keeps it off a public URL entirely.
   "workers_dev": false,
   "observability": { "enabled": true },
-  "triggers": { "crons": ["42 * * * *", "30 3 * * *"] },
+  "triggers": { "crons": ["30 3 * * *", "42 * * * *"] },
   "workflows": [
     {
       "name": "dispatch",

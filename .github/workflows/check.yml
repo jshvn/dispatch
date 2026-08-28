@@ -21,7 +21,8 @@ jobs:
       - run: npx tsc --noEmit
       # Formatting only -- biome.json enables no lint rules.
       - run: npx biome check .
-      # The tests assert wrangler.jsonc's schedules and src/targets.ts agree. A target whose
-      # cron is not scheduled never runs, and a schedule no target claims fails every hour.
+      # The tests assert wrangler.jsonc's triggers are what schedules/ generates, and that
+      # index.ts imports every file in it. A target whose cron is not a trigger never runs, a
+      # trigger no target claims fails every hour, and neither shows up at deploy.
       - run: npx vitest run
       - run: npx wrangler deploy --dry-run

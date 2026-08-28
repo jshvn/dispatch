@@ -1,11 +1,11 @@
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { crons, selectTargets, TARGETS } from "../schedules"
 import type { Env, Params } from "../src/index"
-import { instanceId, selectTargets, TARGETS } from "../src/targets"
 
-// src/index.ts: the two handlers and the instance body. Everything GitHub-facing is mocked
-// -- what matters here is which targets get a step, what reaches the instance, and that the
-// fetch handler stays inert.
+// src/index.ts: the two handlers, the instance body and the instance id. Everything
+// GitHub-facing is mocked -- what matters here is which targets get a step, what reaches the
+// instance, and that the fetch handler stays inert.
 vi.mock("../src/github", () => ({
   appJwt: vi.fn(async () => "jwt"),
   installationToken: vi.fn(async () => "tok"),
@@ -13,7 +13,7 @@ vi.mock("../src/github", () => ({
   isFatal: vi.fn(() => false),
 }))
 
-const { Dispatch, default: worker } = await import("../src/index")
+const { Dispatch, default: worker, instanceId } = await import("../src/index")
 const github = await import("../src/github")
 
 /** An env whose Workflow binding records every instance asked for and creates none. */
@@ -92,6 +92,78 @@ describe("scheduled handler", () => {
     await worker.scheduled(slot, env)
 
     expect(created[0]?.id).toBe(created[1]?.id)
+  })
+})
+
+// Cloudflare's rule for instance ids: [A-Za-z0-9_-], first character not a dash, 100 max.
+describe("instanceId", () => {
+  it("is legal for every cron this Worker is configured with", () => {
+    for (const cron of crons()) {
+      const id = instanceId(cron, 1_756_000_000_000)
+      expect(id, id).toMatch(/^[a-zA-Z0-9_][a-zA-Z0-9-_]*$/)
+      expect(id.length, id).toBeLessThanOrEqual(100)
+    }
+  })
+
+  it("gives one slot one id, so a repeated invocation collides on purpose", () => {
+    expect(instanceId("42 * * * *", 1_756_000_000_000)).toBe(
+      instanceId("42 * * * *", 1_756_000_000_000),
+    )
+  })
+
+  it("keeps expressions apart that fire in the same minute", () => {
+    const at = 1_756_000_000_000
+    expect(instanceId("0 3 * * *", at)).not.toBe(instanceId("0 * * * *", at))
+  })
+
+  // Steps, lists and names are all legal cron and none of their characters are legal in an
+  // id. Only the two expressions configured today are covered above, so this is the guard
+  // that a cron using any of them stays deployable.
+  it("is legal for every character cron can contain", () => {
+    const spellings = [
+      "*/15 * * * *",
+      "0,30 * * * *",
+      "0 9-17 * * 1-5",
+      "0 0 1 JAN,JUN *",
+      "0 0 * * sun",
+      "15 3 */2 * MON-FRI",
+    ]
+    for (const cron of spellings) {
+      const id = instanceId(cron, 1_756_000_000_000)
+      expect(id, cron).toMatch(/^[a-zA-Z0-9_][a-zA-Z0-9-_]*$/)
+      expect(id.length, cron).toBeLessThanOrEqual(100)
+    }
+  })
+
+  // A range and a list are different schedules; an escape that flattened both to the same
+  // character would make one firing skip the other as an id it had already seen.
+  it("keeps a range, a list and a step apart", () => {
+    const at = 1_756_000_000_000
+    const ids = ["0 1-5 * * *", "0 1,5 * * *", "0 1/5 * * *"].map((c) => instanceId(c, at))
+    expect(new Set(ids).size).toBe(3)
+  })
+
+  // Lookup is verbatim everywhere else, so two spellings are two expressions here too. An
+  // escape that case-folded would hand them one id and skip whichever fired second.
+  it("keeps two spellings of one schedule apart", () => {
+    const at = 1_756_000_000_000
+    expect(instanceId("0 0 * * sun", at)).not.toBe(instanceId("0 0 * * SUN", at))
+  })
+
+  // Nothing in cron has to be a character this function was written knowing about.
+  it("escapes anything a cron field could carry", () => {
+    const at = 1_756_000_000_000
+    for (const cron of ["0 0 1 JAN,JUN *", "0 0 L W * ?", "0 0 * * 5#3", "@daily", "0 0 * * *"]) {
+      const id = instanceId(cron, at)
+      expect(id, cron).toMatch(/^[a-zA-Z0-9_][a-zA-Z0-9-_]*$/)
+    }
+  })
+
+  // The escape expands, so length is the ceiling worth pinning: this is the guard that the
+  // crons actually configured stay inside Cloudflare's limit.
+  it("stays inside the 100-character limit for a realistic list cron", () => {
+    const id = instanceId("0,5,10,15,20,25,30,35,40,45,50,55 * * * *", 1_756_000_000_000)
+    expect(id.length, id).toBeLessThanOrEqual(100)
   })
 })
 
