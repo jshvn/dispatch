@@ -28,6 +28,9 @@ export type Target = {
 export const TARGETS: readonly Target[] = [
   // GitHub's own schedule: event delivered 3 of 51 hourly slots here, so this drives it.
   { repo: "jshvn/ctan", workflow: "sync.yml", cron: "42 * * * *" },
+  // TEMPORARY, 2026-08-27: a second ctan slot to prove the App contract end to end.
+  // Remove this and its trigger once a dispatched run has landed.
+  { repo: "jshvn/ctan", workflow: "sync.yml", cron: "47 * * * *" },
   // Daily, in the same slot its own schedule: block asks for, so the fallback and this
   // agree on when the run belongs.
   { repo: "jshvn/tlnet", workflow: "sync.yml", cron: "30 3 * * *" },

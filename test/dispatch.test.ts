@@ -27,8 +27,10 @@ describe("targets and wrangler cron triggers agree", () => {
     expect(schedules.filter((c) => !crons.has(c))).toEqual([])
   })
 
-  it("no repo and workflow pair appears twice", () => {
-    const keys = TARGETS.map((t) => `${t.repo}/${t.workflow}`)
+  // One workflow on two expressions is legitimate -- a second slot for the same workload.
+  // Two identical entries are not: they would dispatch the same run twice in one firing.
+  it("no repo, workflow and cron triple appears twice", () => {
+    const keys = TARGETS.map((t) => `${t.repo}/${t.workflow}@${t.cron}`)
     expect(keys.length).toBe(new Set(keys).size)
   })
 
