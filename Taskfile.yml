@@ -1,0 +1,138 @@
+# Common commands. Bare `task` prints the menu; `task --list` is the generated view.
+#
+# Deploys are automatic: .github/workflows/deploy.yml runs on push to main. Everything here
+# is either a local check or a by-hand operation, and the Cloudflare ones need credentials
+# of their own -- `npx wrangler login` once, or CLOUDFLARE_API_TOKEN in the environment.
+version: '3'
+
+vars:
+  # The Workflow's name in wrangler.jsonc. Wrangler addresses instances by it.
+  NAME: dispatch
+  # The target list, read out of src/targets.ts itself so nothing here can drift from it.
+  # Node imports the TypeScript directly (type stripping), so there is no build step.
+  TARGETS: >-
+    node -e 'const {TARGETS} = await import("./src/targets.ts");
+    for (const t of TARGETS) console.log([t.cron, t.repo, t.workflow].join("\t"))'
+
+tasks:
+  # The menu. ponytail: hand-maintained listing -- go-task can neither group nor annotate,
+  # so a new task means a line below. `task --list` stays the generated view.
+  default:
+    desc: Print the menu - what to run by hand, grouped
+    silent: true
+    cmds:
+      - |
+        b=$(printf '\033[1m'); c=$(printf '\033[1;36m'); d=$(printf '\033[2m'); r=$(printf '\033[0m')
+        printf '%s\n' \
+          "" \
+          "${b}dispatch${r}   ${d}starts GitHub Actions workloads on a schedule, from a Cloudflare Workflow${r}" \
+          "" \
+          "${c}day to day${r}" \
+          "  task check        Everything CI runs: types, lint, tests, dry-run deploy" \
+          "  task targets      What gets dispatched and when, read from src/targets.ts" \
+          "  task runs         Recent runs of each target on GitHub" \
+          "                    ${d}event 'workflow_dispatch' came from here; 'schedule' is GitHub's own fallback${r}" \
+          "" \
+          "${c}pieces of check${r}" \
+          "  task test         vitest -- asserts wrangler.jsonc and src/targets.ts agree" \
+          "  task typecheck    wrangler types && tsc --noEmit" \
+          "  task lint         biome check ${d}(task fix writes)${r}" \
+          "" \
+          "${c}cloudflare -- needs wrangler credentials${r}" \
+          "  task deploy       Deploy by hand; pushing to main does this already" \
+          "  task logs         Live logs (wrangler tail)" \
+          "  task instances    Recent Workflow instances" \
+          "  task instance     One instance's steps, retries and errors ${d}(ID=<id>, default latest)${r}" \
+          "" \
+          "${c}setup -- once, by hand; README.md has the whole procedure${r}" \
+          "  task pkcs8        Convert the GitHub App key to the PKCS#8 WebCrypto imports" \
+          "                    ${d}KEY=app.private-key.pem OUT=app.pkcs8.pem${r}" \
+          "  task secrets      Set the three Worker secrets on Cloudflare" \
+          "" \
+          "${d}there is no way to test a dispatch by hand: an instance with no cron has nothing to look${r}" \
+          "${d}up, so 'wrangler workflows trigger' throws. Add a temporary */5 schedule instead.${r}" \
+          ""
+
+  check:
+    desc: Everything CI runs - types, lint, tests, dry-run deploy
+    cmds:
+      - {task: typecheck}
+      - {task: lint}
+      - {task: test}
+      # Proves wrangler still parses wrangler.jsonc and resolves the Workflow binding.
+      - npx wrangler deploy --dry-run
+
+  test:
+    desc: vitest - the cron strings in wrangler.jsonc and src/targets.ts agree
+    cmds: [npm test]
+
+  typecheck:
+    desc: wrangler types && tsc --noEmit
+    cmds: [npm run typecheck]
+
+  lint:
+    desc: biome check
+    cmds: [npm run lint]
+
+  fix:
+    desc: biome check --write
+    cmds: [npm run lint:fix]
+
+  targets:
+    desc: What gets dispatched and when, read from src/targets.ts
+    silent: true
+    cmds:
+      - |
+        printf '%-14s %-24s %s\n' CRON REPO WORKFLOW
+        {{.TARGETS}} | while IFS=$'\t' read -r cron repo workflow; do
+          printf '%-14s %-24s %s\n' "$cron" "$repo" "$workflow"
+        done
+
+  runs:
+    desc: Recent runs of each target on GitHub - workflow_dispatch ones came from here
+    silent: true
+    vars:
+      LIMIT: '{{.LIMIT | default 10}}'
+    cmds:
+      - |
+        {{.TARGETS}} | while IFS=$'\t' read -r cron repo workflow; do
+          printf '\n%s %s  (%s)\n' "$repo" "$workflow" "$cron"
+          gh run list --repo "$repo" --workflow "$workflow" --limit {{.LIMIT}} \
+            --json createdAt,event,conclusion \
+            --jq '.[] | "  \(.createdAt[0:16] | sub("T"; " "))  \(.event)  \(.conclusion // "running")"'
+        done
+
+  deploy:
+    desc: Deploy the Worker and its schedules to Cloudflare
+    cmds: [npm run deploy]
+
+  logs:
+    desc: Live logs from the deployed Worker
+    cmds: ['npx wrangler tail {{.NAME}}']
+
+  instances:
+    desc: Recent Workflow instances - one per cron that fired
+    cmds: ['npx wrangler workflows instances list {{.NAME}}']
+
+  instance:
+    desc: One instance's steps, retries and errors - ID=<id>, default the latest
+    cmds: ['npx wrangler workflows instances describe {{.NAME}} {{.ID | default "latest"}}']
+
+  pkcs8:
+    desc: Convert a GitHub App key to PKCS#8 - KEY=app.private-key.pem OUT=app.pkcs8.pem
+    vars:
+      KEY: '{{.KEY | default "app.private-key.pem"}}'
+      OUT: '{{.OUT | default "app.pkcs8.pem"}}'
+    cmds:
+      # GitHub issues App keys as PKCS#1. WebCrypto imports PKCS#8 only, and github.ts
+      # throws on anything else rather than failing inside the first dispatch.
+      - openssl pkcs8 -topk8 -nocrypt -in {{.KEY}} -out {{.OUT}}
+      - 'echo "wrote {{.OUT}} -- paste it into: task secrets, then delete both .pem files"'
+
+  secrets:
+    desc: Set the three Worker secrets on Cloudflare - prompts for each
+    cmds:
+      - 'npx wrangler secret put GITHUB_APP_ID'
+      - 'npx wrangler secret put GITHUB_APP_INSTALLATION_ID'
+      # The whole PKCS#8 PEM, BEGIN and END lines included.
+      - 'npx wrangler secret put GITHUB_APP_PRIVATE_KEY'

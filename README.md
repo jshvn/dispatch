@@ -1,80 +1,134 @@
 # dispatch
 
-Starts GitHub Actions workloads on a schedule, because GitHub's own `schedule:` event does
-not.
-
-Measured on `jshvn/ctan`: **3 of 51 consecutive hourly slots fired**, about 6%. Lower
-frequencies on the same account are fine -- 12 of 12 weekly and 5 of 5 monthly on
-`jshvn/everything-claude-code` -- so the failure is specific to the hourly cadence. A
-Cloudflare Workflow triggers the runs instead. The `schedule:` blocks stay in the target
-repos as a fallback.
+Dispatches GitHub Actions workflows on a schedule from a Cloudflare Workflow.
 
 ## How it works
 
-`wrangler.jsonc` lists cron expressions on the Workflow binding. Cloudflare parses them,
-creates one instance per match, and tells the instance which expression fired via
-`event.schedule.cron`. `src/targets.ts` says which repo and workflow that expression means.
+```
+wrangler.jsonc          Cloudflare parses these crons and creates one instance per match,
+  schedules: [...]      handing it the expression that fired as event.schedule.cron
+        │
+        ▼
+src/targets.ts          which repo and workflow that expression means
+        │
+        ▼
+src/github.ts           App JWT -> installation token -> POST .../dispatches
+```
 
-    schedules ──▶ instance (event.schedule.cron) ──▶ selectTargets ──▶ workflow_dispatch
+Four files, and `test/dispatch.test.ts` over them. No cron parser, no scheduling state: an
+instance is a pure function of the cron string and the target list.
 
-There is no cron parser here, and no scheduling state: an instance is a pure function of
-the expression and the target list.
+Two things to know before editing anything:
 
-It dispatches and stops there. It never learns whether a run passed. **Each workload pings
-its own healthcheck**, which is what alerts when a run fails, when a run never starts, and
-when this repo is itself the thing that broke.
+- **The cron strings live in two files** and must agree. A target whose cron is not
+  scheduled never runs; a schedule no target claims throws every time it fires. `task check`
+  asserts both directions and prints what to paste.
+- **Lookup is verbatim.** Cloudflare returns the literal string it was configured with, so
+  `0 */1 * * *` and `0 * * * *` are different keys even though cron treats them alike.
 
 ## Adding a target
 
 1. Add an entry to `TARGETS` in `src/targets.ts`.
-2. Add the same cron string to `schedules` in `wrangler.jsonc`. `npm test` fails if the two
-   disagree and prints what to paste.
-3. Install the GitHub App on the target repo.
-4. Confirm the target workflow has all three. Nothing here can check them:
-   - `workflow_dispatch:` in its `on:` block.
+2. Add the same cron string, character for character, to `schedules` in `wrangler.jsonc`.
+3. Install the GitHub App on the target repo (App settings -> Install App -> Configure).
+4. Confirm the target's workflow has all three of these. Nothing here can check them, and a
+   target failing any of them is dispatched into silence:
+   - `workflow_dispatch:` in its `on:` block, or the dispatch 404s.
    - a `concurrency` group with `cancel-in-progress: false`, so a dispatch arriving mid-run
-     queues instead of doubling up. GitHub keeps exactly one pending run per group.
+     queues instead of doubling up. GitHub keeps exactly one pending run per group, which is
+     what makes a retried dispatch safe.
    - its own healthcheck ping. **A workload without one is unmonitored.**
+5. `task check`, then push to `main`. Deploy runs itself.
+
+## Removing a target
+
+1. Delete its entry from `src/targets.ts`.
+2. Delete its cron from `schedules` in `wrangler.jsonc` -- unless another target still
+   claims that exact string.
+3. `task check`, then push to `main`.
+4. Optional: uninstall the App from that repo, and check its `schedule:` block is still
+   there, because it is the only clock left.
 
 ## Setup
 
-A GitHub App, not a token: installation tokens are minted per run, live an hour, are scoped
+### 1. GitHub App
+
+An App, not a PAT: its installation tokens are minted per dispatch, live an hour, are scoped
 to the repos the App is installed on, and never expire on a calendar.
 
-Create an App with **Actions: read and write**, install it on the target repos, then:
+1. Create it under the `jshvn` account with exactly one permission: **Repository permissions
+   -> Actions -> Read and write**. No webhook.
+2. Install it on the target repos.
+3. Keep the **App ID** from the settings page and the **installation ID** from the end of
+   the installation's URL (`.../installations/<id>`).
+4. Generate a private key and convert it -- GitHub issues PKCS#1, WebCrypto imports PKCS#8
+   only, and `src/github.ts` throws on anything else:
 
-    # GitHub issues App keys as PKCS#1; WebCrypto only imports PKCS#8.
-    openssl pkcs8 -topk8 -nocrypt -in app.private-key.pem -out app.pkcs8.pem
+   ```sh
+   task pkcs8 KEY=app.private-key.pem   # writes app.pkcs8.pem
+   ```
 
-    npx wrangler secret put GITHUB_APP_ID
-    npx wrangler secret put GITHUB_APP_INSTALLATION_ID
-    npx wrangler secret put GITHUB_APP_PRIVATE_KEY   # paste app.pkcs8.pem
+### 2. Worker secrets
 
-Deploys run from `.github/workflows/deploy.yml` on push to `main` and need
-`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as repo secrets.
+Set on Cloudflare, once, by hand. `task secrets` prompts for all three:
 
-## Commands
+| Secret | What it is |
+| --- | --- |
+| `GITHUB_APP_ID` | App ID from the App's settings page |
+| `GITHUB_APP_INSTALLATION_ID` | trailing number of the installation's URL |
+| `GITHUB_APP_PRIVATE_KEY` | the whole `app.pkcs8.pem`, `BEGIN` and `END` lines included |
 
-    npm test          # the checks that matter; see docs/ for what they cover
-    npm run typecheck # wrangler types && tsc --noEmit
-    npm run lint      # biome
-    npm run deploy    # wrangler deploy
+Delete both `.pem` files afterwards. They are not in the repo and must never be.
 
-## Cost
+### 3. Cloudflare API token
 
-Everything is inside the Workers free plan, which matters because Workflows billing began
-2026-08-10.
+`.github/workflows/deploy.yml` deploys on push to `main` and needs a token of its own.
+Dashboard -> **My Profile -> API Tokens -> Create Token -> Create Custom Token**:
 
-| Resource | Free | Used |
+| Scope | Permission | Access |
 | --- | --- | --- |
-| Workflow steps | 3,000 / day | ~26 / day |
-| Requests | 100,000 / day | ~26 / day |
-| Cron expressions per account | 100 | 1 |
-| Subrequests per invocation | 50 | 2 per target |
+| Account | Workers Scripts | Edit |
 
-One step per target per fire. Verified 2026-08-27; re-check before adding anything that
-polls run outcomes, which costs roughly 13 steps per run instead of one.
+That is the whole minimum. Under **Account Resources**, include only the account this Worker
+lives in. Nothing else is needed because this Worker binds no KV, R2, D1 or Queues, serves
+no route or custom domain, and is given its account ID directly, so nothing has to list
+accounts.
 
-`CLAUDE.md` has the design and the traps. `docs/superpowers/specs/` has the reasoning, the
-failure modes and the known ceilings. `docs/HANDOFF.md` tracks setup state until setup is
-done.
+The dashboard's **Edit Cloudflare Workers** template also works and is what Cloudflare's own
+guide points at, but it grants seven permissions this repo never uses: Workers KV Storage
+Write, Workers R2 Storage Write, Workers Tail Read, Account Settings Read, Workers Routes
+Write on every zone, User Details Read and User Memberships Read.
+
+Add **Account -> Workers Tail -> Read** only if you want to run `task logs` with this token
+rather than an interactive `npx wrangler login`.
+
+### 4. GitHub Actions secrets
+
+The minimum set. Repo -> Settings -> Secrets and variables -> Actions:
+
+| Secret | What it is | Where to get it |
+| --- | --- | --- |
+| `CLOUDFLARE_API_TOKEN` | the token from step 3 | shown once, at creation |
+| `CLOUDFLARE_ACCOUNT_ID` | the account the Worker deploys into | Workers & Pages overview, or the hex in any dashboard URL |
+
+`check.yml` needs neither -- it types, lints, tests and dry-run deploys on every push and
+pull request without touching Cloudflare.
+
+## Use
+
+`task` on its own prints the menu.
+
+| Command | What it does |
+| --- | --- |
+| `task check` | everything CI runs: types, lint, tests, dry-run deploy |
+| `task targets` | what gets dispatched and when, read from `src/targets.ts` |
+| `task runs` | recent runs of each target; `workflow_dispatch` ones came from here |
+| `task deploy` | deploy by hand; pushing to `main` already does this |
+| `task logs` | live logs from the deployed Worker |
+| `task instances` | recent Workflow instances, one per cron that fired |
+| `task instance` | one instance's steps, retries and errors (`ID=<id>`, default latest) |
+| `task pkcs8`, `task secrets` | the setup steps above |
+
+There is no way to test a dispatch by hand: an instance created without a cron has nothing
+to look up, so `wrangler workflows trigger` throws on purpose. To try a change end to end,
+add a temporary `*/5 * * * *` schedule and target, watch `task runs`, then revert.
