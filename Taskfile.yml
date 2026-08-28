@@ -27,18 +27,20 @@ tasks:
           "" \
           "${b}dispatch${r}   ${d}starts GitHub Actions workloads on a schedule, from a Cloudflare Workflow${r}" \
           "" \
-          "${c}day to day${r}" \
-          "  task check        Everything CI runs: types, format, tests, dry-run deploy" \
+          "${c}what runs${r}" \
           "  task targets      What gets dispatched and when, read from schedules/" \
           "  task crons        Write wrangler.jsonc's triggers from schedules/" \
           "                    ${d}run after adding or changing a cron; task check fails until you do${r}" \
           "  task runs         Recent runs of each target on GitHub" \
           "                    ${d}every run should say 'workflow_dispatch'; that is this Worker${r}" \
-          "  task format       Fix formatting in place ${d}(biome check --write)${r}" \
           "" \
-          "${c}pieces of check${r}" \
-          "  task test         vitest -- asserts wrangler.jsonc matches schedules/" \
+          "${c}checks${r}" \
+          "  task check        Everything CI runs: types, format, tests, dry-run deploy" \
           "  task typecheck    wrangler types && tsc --noEmit" \
+          "  task format       Fix formatting in place ${d}(biome check --write)${r}" \
+          "  task test         vitest -- asserts wrangler.jsonc matches schedules/" \
+          "  task clean        Delete the generated files; the next task rebuilds them" \
+          "                    ${d}node_modules, .wrangler, worker-configuration.d.ts; keeps .pem and .dev.vars${r}" \
           "" \
           "${c}cloudflare -- needs wrangler credentials${r}" \
           "  task dev          Serve locally; /__scheduled?cron=<expr> fires that slot for real" \
@@ -50,7 +52,6 @@ tasks:
           "" \
           "${c}setup -- once, by hand; README.md has the whole procedure${r}" \
           "  task pkcs8        Convert the GitHub App key to the PKCS#8 WebCrypto imports" \
-          "                    ${d}KEY=app.private-key.pem OUT=app.pkcs8.pem${r}" \
           "  task secrets      Set the three Worker secrets on Cloudflare" \
           "" \
           "${d}prove a dispatch for real, in production:${r}" \
@@ -59,8 +60,23 @@ tasks:
           "${d}minutes to propagate before its first slot; existing ones fire across deploys.${r}" \
           ""
 
+  # Anything running a binary out of node_modules depends on this, so `task clean` is never
+  # a state you have to dig out of by hand. Untouched the failure is `sh: wrangler: command
+  # not found`, and the npx tasks are worse: they say nothing and fetch a wrangler from the
+  # registry, so a deploy would ship through a version this repo never pinned.
+  #
+  # `status` is what keeps it free: node_modules already there means the task is skipped, so
+  # this costs nothing on every run but the first after a clone or a clean.
+  installed:
+    internal: true
+    status: ['test -x node_modules/.bin/wrangler']
+    cmds:
+      - 'echo "node_modules is missing -- npm ci"'
+      - npm ci
+
   check:
     desc: Everything CI runs - types, format, tests, dry-run deploy
+    deps: [installed]
     cmds:
       - {task: typecheck}
       - npm run format
@@ -70,15 +86,33 @@ tasks:
 
   test:
     desc: vitest - wrangler.jsonc's triggers are what schedules/ generates
+    deps: [installed]
     cmds: [npm test]
 
   typecheck:
     desc: wrangler types && tsc --noEmit
+    deps: [installed]
     cmds: [npm run typecheck]
 
   format:
     desc: Fix formatting in place - biome check --write, no lint rules are enabled
+    deps: [installed]
     cmds: [npm run format:fix]
+
+  clean:
+    desc: Delete node_modules, .wrangler and worker-configuration.d.ts - the next task rebuilds
+    silent: true
+    cmds:
+      - |
+        rm -rf node_modules .wrangler worker-configuration.d.ts
+        echo "removed node_modules/, .wrangler/ and worker-configuration.d.ts"
+        # A .pem is an App private key GitHub will not hand out twice, and .dev.vars holds
+        # the three secrets task dev needs. Both are gitignored, neither is something this
+        # can rebuild, and a .pem still here is a live credential worth pointing at.
+        for f in .dev.vars *.pem; do
+          if [ -e "$f" ]; then echo "kept $f -- nothing here can rebuild it"; fi
+        done
+        echo "the next task needing node_modules runs npm ci itself"
 
   # wrangler.jsonc is JSON: it cannot import schedules/, so the crons have to be copied into
   # it. This is the copy. test/schedules.test.ts is what fails until it has been run.
@@ -126,24 +160,29 @@ tasks:
 
   deploy:
     desc: Deploy the Worker and its cron triggers to Cloudflare
+    deps: [installed]
     cmds: [npm run deploy]
 
   dev:
     desc: Serve locally - GET /__scheduled?cron=<expr> fires that slot, dispatching for real
     # --test-scheduled is what exposes /__scheduled. The three Worker secrets have to be in
     # .dev.vars (git-ignored), or every dispatch step fails on the App JWT.
+    deps: [installed]
     cmds: ['npx wrangler dev --test-scheduled']
 
   logs:
     desc: Live logs from the deployed Worker
+    deps: [installed]
     cmds: ['npx wrangler tail {{.NAME}}']
 
   instances:
     desc: Recent Workflow instances - one per cron that fired
+    deps: [installed]
     cmds: ['npx wrangler workflows instances list {{.NAME}}']
 
   inspect:
     desc: One instance's steps, retries and errors - ID=<id>, default the latest
+    deps: [installed]
     cmds: ['npx wrangler workflows instances describe {{.NAME}} {{.ID | default "latest"}}']
 
   pkcs8:
@@ -155,12 +194,17 @@ tasks:
       # GitHub issues App keys as PKCS#1. WebCrypto imports PKCS#8 only, and github.ts
       # throws on anything else rather than failing inside the first dispatch.
       - openssl pkcs8 -topk8 -nocrypt -in {{.KEY}} -out {{.OUT}}
-      - 'echo "wrote {{.OUT}} -- paste it into: task secrets, then delete both .pem files"'
+      - 'echo "wrote {{.OUT}} -- task secrets reads it, then delete both .pem files"'
 
   secrets:
-    desc: Set the three Worker secrets on Cloudflare - prompts for each
+    desc: Set the three Worker secrets on Cloudflare - KEY=app.pkcs8.pem
+    vars:
+      KEY: '{{.KEY | default "app.pkcs8.pem"}}'
+    deps: [installed]
     cmds:
       - 'npx wrangler secret put GITHUB_APP_ID'
       - 'npx wrangler secret put GITHUB_APP_INSTALLATION_ID'
-      # The whole PKCS#8 PEM, BEGIN and END lines included.
-      - 'npx wrangler secret put GITHUB_APP_PRIVATE_KEY'
+      # Piped, not prompted. `wrangler secret put` reads a single line when it has a
+      # terminal, so a pasted PEM would store its BEGIN line and nothing else -- and that is
+      # a non-empty value, which wrangler accepts. Given no TTY it reads stdin to the end.
+      - 'npx wrangler secret put GITHUB_APP_PRIVATE_KEY < {{.KEY}}'

@@ -82,6 +82,10 @@ Each of these fails silently, or only in production.
 - **GitHub issues App keys as PKCS#1; WebCrypto imports PKCS#8 only.** `github.ts` throws
   with the `openssl` command rather than failing inside the signature. `task pkcs8`
   converts.
+- **`wrangler secret put` reads one line when it has a terminal, and the whole of stdin
+  when it does not.** A pasted PEM stores its `BEGIN` line alone, which is non-empty, so
+  wrangler accepts it and the first dispatch is where it surfaces. `task secrets` redirects
+  the file in for `GITHUB_APP_PRIVATE_KEY`; the two id secrets stay prompts.
 
 ## Verifying a change
 
@@ -111,8 +115,20 @@ the instance has no cron to look up and `run()` throws.
 - **A push touching only docs, `LICENSE`, `Taskfile.yml` or `.github/` does not deploy.**
   `deploy.yml` uses a `paths-ignore` deny-list, so a new shipping file deploys without being
   added to anything. `check` still runs on every push. `workflow_dispatch` forces a deploy.
-- **npm 11 gates package install scripts.** A fresh clone needs
-  `npm install-scripts approve esbuild workerd`, or wrangler and vitest have no binaries.
+- **npm 11 gates install scripts, and `allowScripts` in `package.json` pins the approvals
+  by exact version.** `esbuild@0.28.1` and `workerd@1.20260828.1` are approved there, so
+  `npm ci` alone gives working binaries. Bumping either package moves it past its pin, and
+  until `allowScripts` is updated wrangler and vitest install without theirs. `fsevents`
+  warns and is meant to: vitest only wants it to watch files.
+- **`task clean` removes `node_modules`, `.wrangler` and `worker-configuration.d.ts`, and
+  nothing has to be run by hand afterwards.** Every task using a binary from `node_modules`
+  depends on the internal `installed` task, which runs `npm ci` when
+  `node_modules/.bin/wrangler` is missing and is skipped by its `status` when it is not --
+  so a clean costs one install on the next task and nothing on any run after. Untouched, the
+  failure would be `sh: wrangler: command not found`, and the `npx` tasks are worse: they
+  fetch a wrangler from the registry without a word, so a deploy would ship through a version
+  this repo never pinned. `clean` leaves `*.pem` and `.dev.vars` -- both gitignored, neither
+  reproducible by a rebuild, and a `.pem` still present is a live App key.
 - **A PEM private-key header in Bash tool text trips the secret-scan hook**, test fixtures
   included. `test/github.test.ts` builds the header from fragments. Write such files with
   Write or Edit.

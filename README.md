@@ -22,9 +22,12 @@ Once, by hand.
 
 ### Worker secrets
 
-1. Run `task secrets`. It prompts for all three: `GITHUB_APP_ID`,
-   `GITHUB_APP_INSTALLATION_ID`, and `GITHUB_APP_PRIVATE_KEY` -- the whole `app.pkcs8.pem`,
-   `BEGIN` and `END` lines included.
+1. Run `task secrets`. It prompts for `GITHUB_APP_ID` and `GITHUB_APP_INSTALLATION_ID`, then
+   reads `GITHUB_APP_PRIVATE_KEY` from `app.pkcs8.pem`. `KEY=` points it at another path.
+
+   The key is piped rather than pasted because `wrangler secret put` reads a single line
+   when it has a terminal: a pasted PEM would store its `BEGIN` line and nothing else, and
+   that is a non-empty value, so wrangler takes it and the first dispatch is where it shows.
 2. Delete both `.pem` files.
 
 ### Cloudflare API token
@@ -92,6 +95,9 @@ To remove one:
 - `task instances` -- the Cloudflare side, one instance per cron that fired.
 - `task inspect` -- one instance's steps, retries and errors. `ID=<id>`, default latest.
 - `task format` -- fix formatting in place.
+- `task clean` -- delete `node_modules`, `.wrangler` and `worker-configuration.d.ts`. The
+  next task needing them runs `npm ci` itself, so there is nothing to remember. It keeps
+  `.pem` files and `.dev.vars`, which it cannot rebuild, and says so when either is there.
 - `task dev`, `task logs`, `task deploy` -- run locally, live logs, deploy by hand.
 
 To prove a change for real, trigger a production instance with the payload a cron would have
