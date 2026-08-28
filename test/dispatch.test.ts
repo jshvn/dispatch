@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { appJwt, dispatchWorkflow } from "../src/github"
-import { selectTargets, TARGETS } from "../src/targets"
+import { appJwt, dispatchWorkflow, isFatal } from "../src/github"
+import { instanceId, selectTargets, TARGETS } from "../src/targets"
 
 // wrangler.jsonc is JSON with // comments. No cron or key in it contains "//", so stripping
 // line comments is enough; a URL in that file would break this.
@@ -39,6 +39,28 @@ describe("targets and wrangler cron triggers agree", () => {
       expect(t.repo, t.repo).toMatch(/^[\w.-]+\/[\w.-]+$/)
       expect(t.workflow, t.workflow).toMatch(/\.ya?ml$/)
     }
+  })
+})
+
+// Cloudflare's rule for instance ids: [A-Za-z0-9_-], first character not a dash, 100 max.
+describe("instanceId", () => {
+  it("is legal for every cron this Worker is configured with", () => {
+    for (const cron of schedules) {
+      const id = instanceId(cron, 1_756_000_000_000)
+      expect(id, id).toMatch(/^[a-zA-Z0-9_][a-zA-Z0-9-_]*$/)
+      expect(id.length, id).toBeLessThanOrEqual(100)
+    }
+  })
+
+  it("gives one slot one id, so a repeated invocation collides on purpose", () => {
+    expect(instanceId("42 * * * *", 1_756_000_000_000)).toBe(
+      instanceId("42 * * * *", 1_756_000_000_000),
+    )
+  })
+
+  it("keeps expressions apart that fire in the same minute", () => {
+    const at = 1_756_000_000_000
+    expect(instanceId("0 3 * * *", at)).not.toBe(instanceId("0 * * * *", at))
   })
 })
 
@@ -149,8 +171,23 @@ describe("dispatchWorkflow", () => {
     })
   })
 
-  it("throws on anything but 204, so the step retries", async () => {
+  it("throws on anything but 204", async () => {
     const { fetch } = responding(404, "not found")
     await expect(dispatchWorkflow("tok", target, fetch)).rejects.toThrow(/404/)
+  })
+
+  // The step retries what a second attempt could fix and fails fast on what it cannot.
+  it("marks a refusal fatal and a server error retryable", async () => {
+    const fatal = [400, 401, 403, 404, 422]
+    const retryable = [408, 429, 500, 502, 503]
+    for (const status of [...fatal, ...retryable]) {
+      const { fetch } = responding(status, "body")
+      const err = await dispatchWorkflow("tok", target, fetch).catch((e) => e)
+      expect(isFatal(err), String(status)).toBe(fatal.includes(status))
+    }
+  })
+
+  it("does not call a plain error fatal", () => {
+    expect(isFatal(new Error("network"))).toBe(false)
   })
 })

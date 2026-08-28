@@ -11,8 +11,9 @@
 // that broke.
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers"
-import { appJwt, dispatchWorkflow, installationToken } from "./github"
-import { selectTargets } from "./targets"
+import { NonRetryableError } from "cloudflare:workflows"
+import { appJwt, dispatchWorkflow, installationToken, isFatal } from "./github"
+import { instanceId, selectTargets } from "./targets"
 
 /** What `scheduled` hands the instance. The cron string is the whole lookup key. */
 export type Params = {
@@ -22,8 +23,13 @@ export type Params = {
   scheduledTime: number
 }
 
-export type Env = {
-  DISPATCH: Workflow<Params>
+/**
+ * The bindings come from `Cloudflare.Env`, which `wrangler types` generates from
+ * wrangler.jsonc -- a binding renamed there stops compiling here instead of failing at
+ * runtime. Secrets are set with `wrangler secret put`, so they are never in that file and
+ * have to be declared.
+ */
+export type Env = Cloudflare.Env & {
   GITHUB_APP_ID: string
   /** PKCS#8 PEM. See the conversion note in github.ts. */
   GITHUB_APP_PRIVATE_KEY: string
@@ -53,9 +59,16 @@ export class Dispatch extends WorkflowEntrypoint<Env, Params> {
       // never written to workflow state (step output persists for 3 days). One extra
       // subrequest per target, against a ceiling of 50.
       await step.do(`dispatch ${target.repo} ${target.workflow}`, RETRY, async () => {
-        const jwt = await appJwt(this.env.GITHUB_APP_ID, this.env.GITHUB_APP_PRIVATE_KEY)
-        const token = await installationToken(jwt, this.env.GITHUB_APP_INSTALLATION_ID)
-        await dispatchWorkflow(token, target)
+        try {
+          const jwt = await appJwt(this.env.GITHUB_APP_ID, this.env.GITHUB_APP_PRIVATE_KEY)
+          const token = await installationToken(jwt, this.env.GITHUB_APP_INSTALLATION_ID)
+          await dispatchWorkflow(token, target)
+        } catch (err) {
+          // A 404 for a workflow file that is not there, a 403 for a permission the App was
+          // never granted: three retries only delay the message by a minute.
+          if (isFatal(err)) throw new NonRetryableError((err as Error).message)
+          throw err
+        }
         return { repo: target.repo, workflow: target.workflow }
       })
       dispatched.push(`${target.repo}/${target.workflow}`)
@@ -66,12 +79,17 @@ export class Dispatch extends WorkflowEntrypoint<Env, Params> {
 }
 
 export default {
-  // One instance per firing. Creating it is the only thing that happens here: a scheduled
-  // handler gets no retry of its own, and everything that can fail belongs in a step.
+  // One instance per firing, under an id derived from the slot. `createBatch` rather than
+  // `create` because it is the documented idempotent one: an id still inside its retention
+  // window is skipped, so a slot Cloudflare invokes twice dispatches once. A batch of one
+  // is the whole batch -- this handler is called once per expression.
   scheduled: async (controller: ScheduledController, env: Env) => {
-    await env.DISPATCH.create({
-      params: { cron: controller.cron, scheduledTime: controller.scheduledTime },
-    })
+    await env.DISPATCH.createBatch([
+      {
+        id: instanceId(controller.cron, controller.scheduledTime),
+        params: { cron: controller.cron, scheduledTime: controller.scheduledTime },
+      },
+    ])
   },
 
   // Wrangler requires a fetch handler. Nothing should reach this Worker over HTTP, and an

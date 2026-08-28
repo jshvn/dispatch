@@ -52,6 +52,17 @@ Each of these fails silently, or fails only in production. Do not undo them.
   exactly one pending run per group and cancels an older pending one, which is why a
   duplicate queues instead of doubling the work. A target without
   `cancel-in-progress: false` can stack runs.
+- **The instance id is the slot: `<scheduledTime>-<slugged cron>`.** `scheduled` uses
+  `createBatch`, which skips an id still inside its retention window, so a slot Cloudflare
+  invokes twice dispatches once. `create` throws on a duplicate instead. Both the timestamp
+  and the cron belong in the id: two expressions can match the same minute.
+- **A 4xx from GitHub is a typo, not a bad day.** `isFatal` in `src/github.ts` names the
+  statuses a second attempt cannot fix, and the step rethrows those as `NonRetryableError`
+  so the instance fails now with the real message. 408 and 429 stay retryable.
+- **`Env` is `Cloudflare.Env` plus the secrets.** The bindings come from the generated
+  types, so a binding renamed in `wrangler.jsonc` stops compiling. Declaring `DISPATCH` by
+  hand would typecheck clean and fail in production. Secrets are not in `wrangler.jsonc`
+  and have to stay hand-written.
 - **The cron reaches the instance as `event.payload.cron`, put there by `scheduled`.**
   `run()` throws without it on purpose: nothing else should be creating instances. The
   binding's own `schedules` would carry it as `event.schedule` instead, but they need a paid
@@ -71,7 +82,9 @@ Each of these fails silently, or fails only in production. Do not undo them.
 
 - `npm test` -- the two-file seam, the lookup, the JWT, the dispatch request. No network.
 - `npm run typecheck` -- runs `wrangler types` first. `worker-configuration.d.ts` is
-  gitignored, so tsc fails against a missing or stale `Env` without it.
+  gitignored and carries both the runtime types and the bindings, so without it tsc fails
+  on `cloudflare:workers` and on `Cloudflare.Env`. Rerun it after any binding change or
+  tsc checks against the old name.
 - `npm run lint`
 - `npx wrangler deploy --dry-run` -- proves wrangler still parses `wrangler.jsonc` and
   resolves the Workflow binding.
@@ -99,8 +112,6 @@ Hazards, each of which has cost time:
   a new shipping file is covered without being added. `check` still runs on every push. Use
   `workflow_dispatch` to force a deploy.
 
-- **`wrangler types` regenerates from `wrangler.jsonc`.** Change a binding without rerunning
-  it and tsc checks against a stale `Env`.
 - **npm 11 gates package install scripts.** A fresh clone needs
   `npm install-scripts approve esbuild workerd`, or wrangler and vitest have no binaries.
 - **A PEM private-key header in Bash tool text is blocked by the secret-scan hook**, test

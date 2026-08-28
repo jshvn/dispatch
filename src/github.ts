@@ -3,6 +3,27 @@
 const API = "https://api.github.com"
 const UA = "jshvn-dispatch"
 
+/** A refusal from GitHub, carrying the status so the caller can decide whether to retry. */
+export class GitHubError extends Error {
+  readonly status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+/**
+ * GitHub refused the request itself -- a missing workflow file, an App without
+ * `actions: write`, a ref that does not exist. Retrying cannot change the answer, so the
+ * step should fail now and say so rather than spend three attempts on a typo. 429 and 408
+ * are the two 4xx that do clear on their own.
+ */
+export const isFatal = (err: unknown): boolean =>
+  err instanceof GitHubError &&
+  err.status >= 400 &&
+  err.status < 500 &&
+  ![408, 429].includes(err.status)
+
 const b64url = (bytes: ArrayBuffer): string => {
   let s = ""
   for (const b of new Uint8Array(bytes)) s += String.fromCharCode(b)
@@ -64,7 +85,8 @@ export const installationToken = async (
     method: "POST",
     headers: headers(jwt),
   })
-  if (!res.ok) throw new Error(`installation token: ${res.status} ${await res.text()}`)
+  if (!res.ok)
+    throw new GitHubError(res.status, `installation token: ${res.status} ${await res.text()}`)
   const body = (await res.json()) as { token?: string }
   if (!body.token) throw new Error("installation token: response carried no token")
   return body.token
@@ -83,5 +105,8 @@ export const dispatchWorkflow = async (
     body: JSON.stringify({ ref: target.ref ?? "main", inputs: target.inputs ?? {} }),
   })
   if (res.status !== 204)
-    throw new Error(`dispatch ${target.repo}/${target.workflow}: ${res.status} ${await res.text()}`)
+    throw new GitHubError(
+      res.status,
+      `dispatch ${target.repo}/${target.workflow}: ${res.status} ${await res.text()}`,
+    )
 }

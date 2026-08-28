@@ -36,3 +36,14 @@ export const TARGETS: readonly Target[] = [
 /** Targets claiming this cron expression. More than one may share an expression. */
 export const selectTargets = (cron: string, targets: readonly Target[] = TARGETS): Target[] =>
   targets.filter((t) => t.cron === cron)
+
+/**
+ * The instance id for one firing. Deterministic, so a slot that Cloudflare invokes twice
+ * asks for an id that already exists instead of dispatching twice.
+ *
+ * Cloudflare allows `[A-Za-z0-9_-]` and 100 characters. Spaces become `_` and `*` becomes
+ * `x`; no valid cron field contains a literal `x`, so distinct expressions keep distinct
+ * ids. The cron belongs in the id because two expressions can match the same minute.
+ */
+export const instanceId = (cron: string, scheduledTime: number): string =>
+  `${scheduledTime}-${cron.replace(/\*/g, "x").replace(/\s+/g, "_")}`
