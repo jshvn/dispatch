@@ -51,8 +51,10 @@ tasks:
           "                    ${d}KEY=app.private-key.pem OUT=app.pkcs8.pem${r}" \
           "  task secrets      Set the three Worker secrets on Cloudflare" \
           "" \
-          "${d}'wrangler workflows trigger' is not the way in: an instance with no cron has${r}" \
-          "${d}nothing to look up, so it throws. task dev is, and so is a temporary */5 trigger.${r}" \
+          "${d}prove a dispatch for real, in production:${r}" \
+          "${d}  npx wrangler workflows trigger dispatch '{\"cron\":\"42 * * * *\",\"scheduledTime\":0}'${r}" \
+          "${d}without the JSON the instance has no cron and throws. A newly added cron needs${r}" \
+          "${d}minutes to propagate before its first slot; existing ones fire across deploys.${r}" \
           ""
 
   check:

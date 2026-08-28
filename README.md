@@ -137,8 +137,19 @@ pull request without touching Cloudflare.
 | `task instance` | one instance's steps, retries and errors (`ID=<id>`, default latest) |
 | `task pkcs8`, `task secrets` | the setup steps above |
 
-To try a change end to end, `task dev` serves the Worker locally and
-`curl 'http://localhost:8787/__scheduled?cron=30+3+*+*+*'` fires that slot. It needs the
-three secrets in a `.dev.vars` file, and it dispatches for real -- the run appears in the
-target repo. `wrangler workflows trigger` is not the way: an instance created without a
-cron has nothing to look up, so it throws on purpose.
+To prove a change end to end, trigger a production instance with the payload the cron
+would have given it:
+
+```sh
+npx wrangler workflows trigger dispatch '{"cron":"42 * * * *","scheduledTime":0}'
+```
+
+It dispatches for real, and `task instance` shows the step and its output. The JSON is not
+optional -- an instance created without a cron has nothing to look up and throws.
+
+`task dev` does the same locally, with `.dev.vars` holding the three secrets:
+`curl 'http://localhost:8787/__scheduled?cron=30+3+*+*+*'`.
+
+**A new cron expression does not fire straight away.** Cloudflare takes up to 15 minutes to
+propagate one; a slot less than a minute out will be missed. Existing expressions keep
+firing across deploys -- this only affects the first slot of a newly added cron.

@@ -4,7 +4,7 @@ Starts GitHub Actions workloads on a schedule from a Cloudflare Workflow, becaus
 own `schedule:` event delivered 3 of 51 consecutive hourly slots on `jshvn/ctan`. Runs on
 the Workers free plan.
 
-`README.md` is for users. This file and the spec are the design.
+`README.md` is for users. This file is the design.
 
 Everything is in five files:
 
@@ -17,9 +17,9 @@ Everything is in five files:
   targets for the cron it was handed, dispatches them, ends.
 - `test/dispatch.test.ts`: the whole suite.
 
-`docs/superpowers/specs/2026-08-27-dispatch-design.md` holds the design, the failure-mode
-table, the verified free-tier numbers and the known ceilings. `docs/HANDOFF.md` holds the
-setup state.
+Deliberate ceilings, each with an upgrade path: no backfill (a dropped firing loses that
+slot), no outcome monitoring, the cron strings duplicated across two files, and at most ~48
+targets on one expression before the 50-subrequest limit bites.
 
 ## Constraints
 
@@ -64,8 +64,8 @@ Each of these fails silently, or fails only in production. Do not undo them.
 - **GitHub issues App keys as PKCS#1; WebCrypto imports PKCS#8 only.** `github.ts` throws
   with the `openssl pkcs8 -topk8` command rather than failing inside the signature.
 - **Polling run outcomes would cost roughly 13 steps per run instead of one.** That is a
-  different design with a different budget; read the spec's cost section before going near
-  it.
+  different design with a different budget. One step per target per fire is what keeps this
+  inside the free plan's 3,000 steps a day.
 
 ## Verifying a change
 
@@ -76,11 +76,23 @@ Each of these fails silently, or fails only in production. Do not undo them.
 - `npx wrangler deploy --dry-run` -- proves wrangler still parses `wrangler.jsonc` and
   resolves the Workflow binding.
 
-None of that covers the GitHub App contract. The only proof is a real dispatch: add a
-`*/5 * * * *` schedule pointing at a scratch repo, confirm a run appears within ten
-minutes, then remove it.
+None of that covers the GitHub App contract. The only proof is a real dispatch, and the
+cheapest one takes seconds -- a production instance carrying the payload `scheduled` would
+have given it:
+
+    npx wrangler workflows trigger dispatch '{"cron":"42 * * * *","scheduledTime":0}'
+
+It dispatches for real. `npx wrangler workflows instances describe dispatch <id>` then shows
+the step and its output. Without the JSON params the instance has no cron to look up and
+`run()` throws, which is the whole reason the argument matters.
 
 Hazards, each of which has cost time:
+
+- **A new cron expression does not fire immediately after deploy.** Cloudflare documents up
+  to 15 minutes to propagate; measured here, a slot 59 seconds out was missed and one 6
+  minutes out fired. Changing or removing an expression counts as a change too. An
+  unchanged expression keeps firing across deploys, so this only bites on the first slot of
+  a new one.
 
 - **`wrangler types` regenerates from `wrangler.jsonc`.** Change a binding without rerunning
   it and tsc checks against a stale `Env`.
