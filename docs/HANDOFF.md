@@ -28,8 +28,9 @@ exchanged for a token, and no dispatch has ever been sent. That is the whole ris
 ## Remaining setup
 
 **1. Create the GitHub App.** Owner `jshvn`, one permission: **Repository permissions ->
-Actions -> Read and write**. No webhook. Install it on `jshvn/ctan`. Keep the App ID from
-the settings page and the installation ID from the end of the installation's URL.
+Actions -> Read and write**. No webhook. Install it on `jshvn/ctan` and `jshvn/tlnet`. Keep
+the App ID from the settings page and the installation ID from the end of the installation's
+URL.
 
 **2. Convert the private key.** GitHub issues PKCS#1; WebCrypto imports PKCS#8 only.
 
@@ -70,8 +71,6 @@ roughly 24 `workflow_dispatch` runs where the two days before this showed 3 sche
 
 ## Deliberately not done
 
-- **`jshvn/tlnet` is not a target.** Its cron is daily, and daily cadences deliver fine on
-  this account. Watch it for a week before assuming it needs this.
 - **The two `everything-claude-code` workflows are not targets.** Both deliver at 100%.
   Nothing is broken there to fix.
 - **GitHub's `schedule:` blocks stay in every target repo.** About one run a day, free, and

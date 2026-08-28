@@ -14,7 +14,7 @@
       "name": "dispatch",
       "binding": "DISPATCH",
       "class_name": "Dispatch",
-      "schedules": ["42 * * * *"]
+      "schedules": ["42 * * * *", "30 3 * * *"]
     }
   ]
 }
