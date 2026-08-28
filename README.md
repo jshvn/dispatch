@@ -75,4 +75,6 @@ Everything is inside the Workers free plan, which matters because Workflows bill
 One step per target per fire. Verified 2026-08-27; re-check before adding anything that
 polls run outcomes, which costs roughly 13 steps per run instead of one.
 
-`docs/superpowers/specs/` has the design, the failure modes and the known ceilings.
+`CLAUDE.md` has the design and the traps. `docs/superpowers/specs/` has the reasoning, the
+failure modes and the known ceilings. `docs/HANDOFF.md` tracks setup state until setup is
+done.
