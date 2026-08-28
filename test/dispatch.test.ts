@@ -89,6 +89,29 @@ describe("instanceId", () => {
     const ids = ["0 1-5 * * *", "0 1,5 * * *", "0 1/5 * * *"].map((c) => instanceId(c, at))
     expect(new Set(ids).size).toBe(3)
   })
+
+  // Lookup is verbatim everywhere else, so two spellings are two expressions here too. An
+  // escape that case-folded would hand them one id and skip whichever fired second.
+  it("keeps two spellings of one schedule apart", () => {
+    const at = 1_756_000_000_000
+    expect(instanceId("0 0 * * sun", at)).not.toBe(instanceId("0 0 * * SUN", at))
+  })
+
+  // Nothing in cron has to be a character this function was written knowing about.
+  it("escapes anything a cron field could carry", () => {
+    const at = 1_756_000_000_000
+    for (const cron of ["0 0 1 JAN,JUN *", "0 0 L W * ?", "0 0 * * 5#3", "@daily", "0 0 * * *"]) {
+      const id = instanceId(cron, at)
+      expect(id, cron).toMatch(/^[a-zA-Z0-9_][a-zA-Z0-9-_]*$/)
+    }
+  })
+
+  // The escape expands, so length is the ceiling worth pinning: this is the guard that the
+  // crons actually configured stay inside Cloudflare's limit.
+  it("stays inside the 100-character limit for a realistic list cron", () => {
+    const id = instanceId("0,5,10,15,20,25,30,35,40,45,50,55 * * * *", 1_756_000_000_000)
+    expect(id.length, id).toBeLessThanOrEqual(100)
+  })
 })
 
 describe("selectTargets", () => {

@@ -46,13 +46,19 @@ export const selectTargets = (cron: string, targets: readonly Target[] = TARGETS
  * asks for an id that already exists instead of dispatching twice. The cron belongs in the
  * id because two expressions can match the same minute.
  *
- * Cloudflare allows `[A-Za-z0-9_-]` and 100 characters, so the four cron characters outside
- * that set are escaped. Upper-casing first is what makes the escape unambiguous: a cron may
- * name a month or weekday (`SUN`, `DEC`), and upper-casing leaves the lower-case escapes
- * with nothing to collide against. `-` is already legal and passes through, which keeps a
- * range (`1-5`) distinct from a list (`1,5`).
+ * Cloudflare allows `[A-Za-z0-9_-]`. Every character outside that set becomes `_` and two
+ * hex digits -- including `_` itself, so nothing but an escape can produce one and distinct
+ * crons keep distinct ids whatever they contain. Escaping by code point rather than by a
+ * table of the characters cron is known to use is what keeps that true: it needs no claim
+ * about which spellings Cloudflare accepts, and it leaves case alone, so two expressions
+ * differing only in case stay two expressions here as they do everywhere else.
+ *
+ * ponytail: the escape expands, so a long enough list cron would pass Cloudflare's
+ * 100-character id limit and be rejected at `createBatch`. The tests assert the configured
+ * crons are inside it; a longer one would want a hash here instead.
  */
-const ESCAPE: Record<string, string> = { " ": "_", "*": "x", "/": "s", ",": "c" }
-
 export const instanceId = (cron: string, scheduledTime: number): string =>
-  `${scheduledTime}-${cron.toUpperCase().replace(/[ */,]/g, (c) => ESCAPE[c] as string)}`
+  `${scheduledTime}-${cron.replace(
+    /[^A-Za-z0-9-]/g,
+    (c) => `_${c.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  )}`
