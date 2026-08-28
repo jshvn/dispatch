@@ -15,11 +15,13 @@ Everything is in five files:
 - `src/github.ts`: App JWT, installation token, `workflow_dispatch`. No SDK, two requests.
 - `src/index.ts`: `scheduled` creates one instance per firing; the Workflow looks up the
   targets for the cron it was handed, dispatches them, ends.
-- `test/dispatch.test.ts`: the whole suite.
+- `test/dispatch.test.ts`: the two-file seam, the lookup, the instance id, the JWT, the
+  dispatch request. `test/index.test.ts` covers the two handlers and the instance body; it
+  mocks `src/github`, which is why it is a second file rather than more of the first.
 
 Deliberate ceilings, each with an upgrade path: no backfill (a dropped firing loses that
-slot), no outcome monitoring, the cron strings duplicated across two files, and at most ~48
-targets on one expression before the 50-subrequest limit bites.
+slot), no outcome monitoring, the cron strings duplicated across two files, and a per-step
+subrequest budget that bounds how many targets one expression can carry.
 
 ## Constraints
 
@@ -43,8 +45,9 @@ Each of these fails silently, or fails only in production. Do not undo them.
   so `0 */1 * * *` and `0 * * * *` are different keys even though cron treats them alike.
 - **The installation token is minted inside each dispatch step, never in a shared step
   above it.** Step output persists for three days, so a shared token step would write a
-  live GitHub credential into workflow state. The cost is one extra subrequest per target,
-  against a ceiling of 50.
+  live GitHub credential into workflow state. The cost is one extra subrequest per target.
+- **This is the only clock the targets have.** Their workflows carry no `schedule:` of
+  their own. A slot this Worker drops is a run that does not happen, and nothing retries it.
 - **This repo never learns whether a run passed.** Each workload pings its own healthcheck.
   That is the only alert, and it is what catches this repo being the thing that broke. A
   target added without a healthcheck of its own is dispatched into silence.
@@ -80,12 +83,14 @@ Each of these fails silently, or fails only in production. Do not undo them.
 
 ## Verifying a change
 
-- `npm test` -- the two-file seam, the lookup, the JWT, the dispatch request. No network.
+- `npm test` -- the two-file seam, the lookup, the instance id, the JWT, the dispatch
+  request, and both handlers. No network.
 - `npm run typecheck` -- runs `wrangler types` first. `worker-configuration.d.ts` is
   gitignored and carries both the runtime types and the bindings, so without it tsc fails
   on `cloudflare:workers` and on `Cloudflare.Env`. Rerun it after any binding change or
   tsc checks against the old name.
-- `npm run lint`
+- `npm run format` -- Biome. Formatting only: `biome.json` enables no lint rules, so this
+  gate will not catch `any`, an unused binding or a stray `console.log`.
 - `npx wrangler deploy --dry-run` -- proves wrangler still parses `wrangler.jsonc` and
   resolves the Workflow binding.
 

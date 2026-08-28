@@ -6,8 +6,8 @@
     "deploy": "wrangler deploy",
     "types": "wrangler types",
     "typecheck": "wrangler types && tsc --noEmit",
-    "lint": "biome check .",
-    "lint:fix": "biome check --write .",
+    "format": "biome check .",
+    "format:fix": "biome check --write .",
     "test": "vitest run"
   },
   "devDependencies": {

@@ -13,6 +13,9 @@
   "name": "dispatch",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
+  // Nothing here is meant to be reachable over HTTP. The fetch handler exists because
+  // wrangler requires a default export, and this keeps it off a public URL entirely.
+  "workers_dev": false,
   "observability": { "enabled": true },
   "triggers": { "crons": ["42 * * * *", "30 3 * * *"] },
   "workflows": [

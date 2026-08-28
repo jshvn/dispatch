@@ -19,6 +19,7 @@ jobs:
       # proves wrangler still parses wrangler.jsonc after an edit.
       - run: npx wrangler types
       - run: npx tsc --noEmit
+      # Formatting only -- biome.json enables no lint rules.
       - run: npx biome check .
       # The tests assert wrangler.jsonc's schedules and src/targets.ts agree. A target whose
       # cron is not scheduled never runs, and a schedule no target claims fails every hour.

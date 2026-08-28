@@ -18,11 +18,14 @@ src/targets.ts          which repo and workflow that expression means
 src/github.ts           App JWT -> installation token -> POST .../dispatches
 ```
 
-Four files, and `test/dispatch.test.ts` over them. No cron parser, no scheduling state: an
-instance is a pure function of the cron string and the target list.
+Four files, and `test/` over them. No cron parser, no scheduling state: an instance is a
+pure function of the cron string and the target list.
 
-Three things to know before editing anything:
+Four things to know before editing anything:
 
+- **This is the only clock.** The target workflows carry no `schedule:` of their own, so a
+  slot lost here is a run that does not happen. Nothing backs it up except each workload's
+  own healthcheck, which is what reports the silence.
 - **The cron strings live in two files** and must agree. A target whose cron is not a
   trigger never runs; a trigger no target claims throws every time it fires. `task check`
   asserts both directions and prints what to paste.
@@ -53,8 +56,9 @@ Three things to know before editing anything:
 2. Delete its cron from `triggers.crons` in `wrangler.jsonc` -- unless another target still
    claims that exact string.
 3. `task check`, then push to `main`.
-4. Optional: uninstall the App from that repo, and check its `schedule:` block is still
-   there, because it is the only clock left.
+4. Give that workflow a clock of its own, or it now has none -- a `schedule:` block in the
+   workflow, or another dispatcher. Removing it here is what stops it running.
+5. Optional: uninstall the App from that repo.
 
 ## Setup
 
@@ -118,7 +122,7 @@ The minimum set. Repo -> Settings -> Secrets and variables -> Actions:
 | `CLOUDFLARE_API_TOKEN` | the token from step 3 | shown once, at creation |
 | `CLOUDFLARE_ACCOUNT_ID` | the account the Worker deploys into | Workers & Pages overview, or the hex in any dashboard URL |
 
-`check.yml` needs neither -- it types, lints, tests and dry-run deploys on every push and
+`check.yml` needs neither -- it types, formats, tests and dry-run deploys on every push and
 pull request without touching Cloudflare.
 
 ## Use
@@ -127,7 +131,7 @@ pull request without touching Cloudflare.
 
 | Command | What it does |
 | --- | --- |
-| `task check` | everything CI runs: types, lint, tests, dry-run deploy |
+| `task check` | everything CI runs: types, format, tests, dry-run deploy |
 | `task targets` | what gets dispatched and when, read from `src/targets.ts` |
 | `task runs` | recent runs of each target; `workflow_dispatch` ones came from here |
 | `task deploy` | deploy by hand; pushing to `main` already does this |

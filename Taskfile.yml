@@ -28,15 +28,15 @@ tasks:
           "${b}dispatch${r}   ${d}starts GitHub Actions workloads on a schedule, from a Cloudflare Workflow${r}" \
           "" \
           "${c}day to day${r}" \
-          "  task check        Everything CI runs: types, lint, tests, dry-run deploy" \
+          "  task check        Everything CI runs: types, format, tests, dry-run deploy" \
           "  task targets      What gets dispatched and when, read from src/targets.ts" \
           "  task runs         Recent runs of each target on GitHub" \
-          "                    ${d}event 'workflow_dispatch' came from here; 'schedule' is GitHub's own fallback${r}" \
+          "                    ${d}every run should say 'workflow_dispatch'; that is this Worker${r}" \
           "" \
           "${c}pieces of check${r}" \
           "  task test         vitest -- asserts wrangler.jsonc and src/targets.ts agree" \
           "  task typecheck    wrangler types && tsc --noEmit" \
-          "  task lint         biome check ${d}(task fix writes)${r}" \
+          "  task format       biome format check ${d}(task fix writes)${r}" \
           "" \
           "${c}cloudflare -- needs wrangler credentials${r}" \
           "  task dev          Serve locally; /__scheduled?cron=<expr> fires that slot for real" \
@@ -58,10 +58,10 @@ tasks:
           ""
 
   check:
-    desc: Everything CI runs - types, lint, tests, dry-run deploy
+    desc: Everything CI runs - types, format, tests, dry-run deploy
     cmds:
       - {task: typecheck}
-      - {task: lint}
+      - {task: format}
       - {task: test}
       # Proves wrangler still parses wrangler.jsonc and resolves the Workflow binding.
       - npx wrangler deploy --dry-run
@@ -74,13 +74,13 @@ tasks:
     desc: wrangler types && tsc --noEmit
     cmds: [npm run typecheck]
 
-  lint:
-    desc: biome check
-    cmds: [npm run lint]
+  format:
+    desc: biome format check - no lint rules are enabled
+    cmds: [npm run format]
 
   fix:
     desc: biome check --write
-    cmds: [npm run lint:fix]
+    cmds: [npm run format:fix]
 
   targets:
     desc: What gets dispatched and when, read from src/targets.ts

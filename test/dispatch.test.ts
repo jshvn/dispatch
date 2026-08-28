@@ -62,6 +62,33 @@ describe("instanceId", () => {
     const at = 1_756_000_000_000
     expect(instanceId("0 3 * * *", at)).not.toBe(instanceId("0 * * * *", at))
   })
+
+  // Steps, lists and names are all legal cron and none of their characters are legal in an
+  // id. Only the two expressions configured today are covered above, so this is the guard
+  // that a cron using any of them stays deployable.
+  it("is legal for every character cron can contain", () => {
+    const crons = [
+      "*/15 * * * *",
+      "0,30 * * * *",
+      "0 9-17 * * 1-5",
+      "0 0 1 JAN,JUN *",
+      "0 0 * * sun",
+      "15 3 */2 * MON-FRI",
+    ]
+    for (const cron of crons) {
+      const id = instanceId(cron, 1_756_000_000_000)
+      expect(id, cron).toMatch(/^[a-zA-Z0-9_][a-zA-Z0-9-_]*$/)
+      expect(id.length, cron).toBeLessThanOrEqual(100)
+    }
+  })
+
+  // A range and a list are different schedules; an escape that flattened both to the same
+  // character would make one firing skip the other as an id it had already seen.
+  it("keeps a range, a list and a step apart", () => {
+    const at = 1_756_000_000_000
+    const ids = ["0 1-5 * * *", "0 1,5 * * *", "0 1/5 * * *"].map((c) => instanceId(c, at))
+    expect(new Set(ids).size).toBe(3)
+  })
 })
 
 describe("selectTargets", () => {

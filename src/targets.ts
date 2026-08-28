@@ -10,6 +10,10 @@
 //   3. The workload pings its own healthcheck. This repo never learns whether a run passed,
 //      so a workload without one is unmonitored.
 //
+// These workflows carry no `schedule:` of their own, so this list is the only clock they
+// have. A slot lost here is a run that does not happen, and the workload's own healthcheck
+// is what says so.
+//
 // `cron` must appear verbatim in wrangler.jsonc's triggers.crons; the tests assert it both
 // ways. The free plan allows 5 cron expressions per Cloudflare account, in total.
 
@@ -26,10 +30,10 @@ export type Target = {
 }
 
 export const TARGETS: readonly Target[] = [
-  // GitHub's own schedule: event delivered 3 of 51 hourly slots here, so this drives it.
+  // Hourly. GitHub's own schedule: event delivered 3 of 51 consecutive slots here, which is
+  // what this repo exists to replace.
   { repo: "jshvn/ctan", workflow: "sync.yml", cron: "42 * * * *" },
-  // Daily, in the same slot its own schedule: block asks for, so the fallback and this
-  // agree on when the run belongs.
+  // Daily.
   { repo: "jshvn/tlnet", workflow: "sync.yml", cron: "30 3 * * *" },
 ]
 
@@ -39,11 +43,16 @@ export const selectTargets = (cron: string, targets: readonly Target[] = TARGETS
 
 /**
  * The instance id for one firing. Deterministic, so a slot that Cloudflare invokes twice
- * asks for an id that already exists instead of dispatching twice.
+ * asks for an id that already exists instead of dispatching twice. The cron belongs in the
+ * id because two expressions can match the same minute.
  *
- * Cloudflare allows `[A-Za-z0-9_-]` and 100 characters. Spaces become `_` and `*` becomes
- * `x`; no valid cron field contains a literal `x`, so distinct expressions keep distinct
- * ids. The cron belongs in the id because two expressions can match the same minute.
+ * Cloudflare allows `[A-Za-z0-9_-]` and 100 characters, so the four cron characters outside
+ * that set are escaped. Upper-casing first is what makes the escape unambiguous: a cron may
+ * name a month or weekday (`SUN`, `DEC`), and upper-casing leaves the lower-case escapes
+ * with nothing to collide against. `-` is already legal and passes through, which keeps a
+ * range (`1-5`) distinct from a list (`1,5`).
  */
+const ESCAPE: Record<string, string> = { " ": "_", "*": "x", "/": "s", ",": "c" }
+
 export const instanceId = (cron: string, scheduledTime: number): string =>
-  `${scheduledTime}-${cron.replace(/\*/g, "x").replace(/\s+/g, "_")}`
+  `${scheduledTime}-${cron.toUpperCase().replace(/[ */,]/g, (c) => ESCAPE[c] as string)}`

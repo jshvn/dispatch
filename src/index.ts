@@ -56,8 +56,8 @@ export class Dispatch extends WorkflowEntrypoint<Env, Params> {
     const dispatched: string[] = []
     for (const target of targets) {
       // The token is minted inside the step rather than in one shared step above, so it is
-      // never written to workflow state (step output persists for 3 days). One extra
-      // subrequest per target, against a ceiling of 50.
+      // never written to workflow state (step output persists for 3 days). The cost is one
+      // extra subrequest per target.
       await step.do(`dispatch ${target.repo} ${target.workflow}`, RETRY, async () => {
         try {
           const jwt = await appJwt(this.env.GITHUB_APP_ID, this.env.GITHUB_APP_PRIVATE_KEY)
