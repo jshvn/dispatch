@@ -1,0 +1,26 @@
+name: check
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      # Generates worker-configuration.d.ts, which is gitignored. tsc needs it, and it also
+      # proves wrangler still parses wrangler.jsonc after an edit.
+      - run: npx wrangler types
+      - run: npx tsc --noEmit
+      - run: npx biome check .
+      # The tests assert wrangler.jsonc's schedules and src/targets.ts agree. A target whose
+      # cron is not scheduled never runs, and a schedule no target claims fails every hour.
+      - run: npx vitest run
+      - run: npx wrangler deploy --dry-run

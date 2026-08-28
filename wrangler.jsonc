@@ -1,0 +1,20 @@
+// Cloudflare Workflows scheduler. Cloudflare parses these crons and creates one instance
+// per match, handing it event.schedule.cron -- so there is no cron matcher in this repo.
+//
+// Every cron below must appear verbatim on a target in src/targets.ts, and every target's
+// cron must appear below. test/dispatch.test.ts asserts both and prints the array to paste.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dispatch",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "observability": { "enabled": true },
+  "workflows": [
+    {
+      "name": "dispatch",
+      "binding": "DISPATCH",
+      "class_name": "Dispatch",
+      "schedules": ["42 * * * *"]
+    }
+  ]
+}
