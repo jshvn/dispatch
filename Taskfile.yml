@@ -32,11 +32,11 @@ tasks:
           "  task targets      What gets dispatched and when, read from src/targets.ts" \
           "  task runs         Recent runs of each target on GitHub" \
           "                    ${d}every run should say 'workflow_dispatch'; that is this Worker${r}" \
+          "  task format       Fix formatting in place ${d}(biome check --write)${r}" \
           "" \
           "${c}pieces of check${r}" \
           "  task test         vitest -- asserts wrangler.jsonc and src/targets.ts agree" \
           "  task typecheck    wrangler types && tsc --noEmit" \
-          "  task format       biome format check ${d}(task fix writes)${r}" \
           "" \
           "${c}cloudflare -- needs wrangler credentials${r}" \
           "  task dev          Serve locally; /__scheduled?cron=<expr> fires that slot for real" \
@@ -44,7 +44,7 @@ tasks:
           "  task deploy       Deploy by hand; pushing to main does this already" \
           "  task logs         Live logs (wrangler tail)" \
           "  task instances    Recent Workflow instances" \
-          "  task instance     One instance's steps, retries and errors ${d}(ID=<id>, default latest)${r}" \
+          "  task inspect      One instance's steps, retries and errors ${d}(ID=<id>, default latest)${r}" \
           "" \
           "${c}setup -- once, by hand; README.md has the whole procedure${r}" \
           "  task pkcs8        Convert the GitHub App key to the PKCS#8 WebCrypto imports" \
@@ -61,7 +61,7 @@ tasks:
     desc: Everything CI runs - types, format, tests, dry-run deploy
     cmds:
       - {task: typecheck}
-      - {task: format}
+      - npm run format
       - {task: test}
       # Proves wrangler still parses wrangler.jsonc and resolves the Workflow binding.
       - npx wrangler deploy --dry-run
@@ -75,11 +75,7 @@ tasks:
     cmds: [npm run typecheck]
 
   format:
-    desc: biome format check - no lint rules are enabled
-    cmds: [npm run format]
-
-  fix:
-    desc: biome check --write
+    desc: Fix formatting in place - biome check --write, no lint rules are enabled
     cmds: [npm run format:fix]
 
   targets:
@@ -124,7 +120,7 @@ tasks:
     desc: Recent Workflow instances - one per cron that fired
     cmds: ['npx wrangler workflows instances list {{.NAME}}']
 
-  instance:
+  inspect:
     desc: One instance's steps, retries and errors - ID=<id>, default the latest
     cmds: ['npx wrangler workflows instances describe {{.NAME}} {{.ID | default "latest"}}']
 
