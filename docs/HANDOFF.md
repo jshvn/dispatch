@@ -48,10 +48,12 @@ Cloudflare Workers) and `CLOUDFLARE_ACCOUNT_ID`. Re-run the failed `deploy` job.
 **5. Smoke test the App contract**, because nothing else does. Point a fast schedule at a
 scratch repo, confirm a run appears, then revert:
 
-    # in wrangler.jsonc schedules and src/targets.ts, temporarily add
+    # in wrangler.jsonc triggers.crons and src/targets.ts, temporarily add
     { repo: "jshvn/<scratch>", workflow: "<something>.yml", cron: "*/5 * * * *" }
 
-A run should appear within ten minutes. If it does not, read the instance in the Cloudflare
+`task dev` proves the same contract locally first, and cheaper: it serves the Worker with
+`/__scheduled?cron=<expr>`, which dispatches for real once `.dev.vars` holds the three
+secrets. A run should appear within ten minutes. If it does not, read the instance in the Cloudflare
 dashboard under Workers -> Workflows; failed steps and their errors are kept for three days
 on the free plan.
 

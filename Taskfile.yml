@@ -39,6 +39,8 @@ tasks:
           "  task lint         biome check ${d}(task fix writes)${r}" \
           "" \
           "${c}cloudflare -- needs wrangler credentials${r}" \
+          "  task dev          Serve locally; /__scheduled?cron=<expr> fires that slot for real" \
+          "                    ${d}needs .dev.vars with the three secrets; it dispatches to GitHub${r}" \
           "  task deploy       Deploy by hand; pushing to main does this already" \
           "  task logs         Live logs (wrangler tail)" \
           "  task instances    Recent Workflow instances" \
@@ -49,8 +51,8 @@ tasks:
           "                    ${d}KEY=app.private-key.pem OUT=app.pkcs8.pem${r}" \
           "  task secrets      Set the three Worker secrets on Cloudflare" \
           "" \
-          "${d}there is no way to test a dispatch by hand: an instance with no cron has nothing to look${r}" \
-          "${d}up, so 'wrangler workflows trigger' throws. Add a temporary */5 schedule instead.${r}" \
+          "${d}'wrangler workflows trigger' is not the way in: an instance with no cron has${r}" \
+          "${d}nothing to look up, so it throws. task dev is, and so is a temporary */5 trigger.${r}" \
           ""
 
   check:
@@ -103,8 +105,14 @@ tasks:
         done
 
   deploy:
-    desc: Deploy the Worker and its schedules to Cloudflare
+    desc: Deploy the Worker and its cron triggers to Cloudflare
     cmds: [npm run deploy]
+
+  dev:
+    desc: Serve locally - GET /__scheduled?cron=<expr> fires that slot, dispatching for real
+    # --test-scheduled is what exposes /__scheduled. The three Worker secrets have to be in
+    # .dev.vars (git-ignored), or every dispatch step fails on the App JWT.
+    cmds: ['npx wrangler dev --test-scheduled']
 
   logs:
     desc: Live logs from the deployed Worker

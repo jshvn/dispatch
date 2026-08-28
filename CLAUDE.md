@@ -8,13 +8,13 @@ the Workers free plan.
 
 Everything is in five files:
 
-- `wrangler.jsonc`: the cron expressions. Cloudflare parses them and creates one Workflow
-  instance per match.
+- `wrangler.jsonc`: the cron expressions, as Worker cron triggers. Cloudflare parses them
+  and invokes `scheduled` once per match.
 - `src/targets.ts`: which repo and workflow each expression means. The only file a routine
   change touches.
 - `src/github.ts`: App JWT, installation token, `workflow_dispatch`. No SDK, two requests.
-- `src/index.ts`: the Workflow. Looks up the targets for the cron that fired, dispatches
-  them, ends.
+- `src/index.ts`: `scheduled` creates one instance per firing; the Workflow looks up the
+  targets for the cron it was handed, dispatches them, ends.
 - `test/dispatch.test.ts`: the whole suite.
 
 `docs/superpowers/specs/2026-08-27-dispatch-design.md` holds the design, the failure-mode
@@ -35,8 +35,8 @@ setup state.
 
 Each of these fails silently, or fails only in production. Do not undo them.
 
-- **The cron strings live in two files.** `schedules` in `wrangler.jsonc` and `cron` in
-  `src/targets.ts`. A target whose cron is not scheduled never runs; a schedule no target
+- **The cron strings live in two files.** `triggers.crons` in `wrangler.jsonc` and `cron` in
+  `src/targets.ts`. A target whose cron is not a trigger never runs; a trigger no target
   claims throws every time it fires. The tests assert both directions and print what to
   paste. Never edit one without the other.
 - **Lookup is verbatim.** Cloudflare hands back the literal string it was configured with,
@@ -52,8 +52,12 @@ Each of these fails silently, or fails only in production. Do not undo them.
   exactly one pending run per group and cancels an older pending one, which is why a
   duplicate queues instead of doubling the work. A target without
   `cancel-in-progress: false` can stack runs.
-- **`event.schedule` exists only on cron-created instances.** `run()` throws without it on
-  purpose: nothing else should be creating instances.
+- **The cron reaches the instance as `event.payload.cron`, put there by `scheduled`.**
+  `run()` throws without it on purpose: nothing else should be creating instances. The
+  binding's own `schedules` would carry it as `event.schedule` instead, but they need a paid
+  plan, which is why the handler exists.
+- **Cron triggers are capped at 5 per Cloudflare account on the free plan** -- every Worker
+  on the account shares that allowance. Targets sharing one expression share one trigger.
 - **The `fetch` handler must exist and must not create instances.** Wrangler requires a
   default export, and an endpoint that started a run would let anyone trigger every
   workload on the list.

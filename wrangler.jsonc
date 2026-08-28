@@ -1,5 +1,10 @@
-// Cloudflare Workflows scheduler. Cloudflare parses these crons and creates one instance
-// per match, handing it event.schedule.cron -- so there is no cron matcher in this repo.
+// Cloudflare Workflows scheduler. Cloudflare parses these crons and invokes the scheduled
+// handler once per match, handing it the expression that fired -- so there is no cron
+// matcher in this repo.
+//
+// Cron triggers, not the Workflow binding's own `schedules`: those are a paid-plan feature,
+// and `wrangler deploy` refuses them on the free plan. The ceiling here is 5 cron
+// expressions per Cloudflare account, against 100 for the paid-only kind.
 //
 // Every cron below must appear verbatim on a target in src/targets.ts, and every target's
 // cron must appear below. test/dispatch.test.ts asserts both and prints the array to paste.
@@ -9,12 +14,12 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "observability": { "enabled": true },
+  "triggers": { "crons": ["42 * * * *", "30 3 * * *"] },
   "workflows": [
     {
       "name": "dispatch",
       "binding": "DISPATCH",
-      "class_name": "Dispatch",
-      "schedules": ["42 * * * *", "30 3 * * *"]
+      "class_name": "Dispatch"
     }
   ]
 }

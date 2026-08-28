@@ -5,8 +5,11 @@ Dispatches GitHub Actions workflows on a schedule from a Cloudflare Workflow.
 ## How it works
 
 ```
-wrangler.jsonc          Cloudflare parses these crons and creates one instance per match,
-  schedules: [...]      handing it the expression that fired as event.schedule.cron
+wrangler.jsonc          Cloudflare parses these crons and calls the scheduled handler
+  triggers.crons        once per match, handing it the expression that fired
+        │
+        ▼
+src/index.ts            creates one Workflow instance, carrying that expression
         │
         ▼
 src/targets.ts          which repo and workflow that expression means
@@ -18,18 +21,22 @@ src/github.ts           App JWT -> installation token -> POST .../dispatches
 Four files, and `test/dispatch.test.ts` over them. No cron parser, no scheduling state: an
 instance is a pure function of the cron string and the target list.
 
-Two things to know before editing anything:
+Three things to know before editing anything:
 
-- **The cron strings live in two files** and must agree. A target whose cron is not
-  scheduled never runs; a schedule no target claims throws every time it fires. `task check`
+- **The cron strings live in two files** and must agree. A target whose cron is not a
+  trigger never runs; a trigger no target claims throws every time it fires. `task check`
   asserts both directions and prints what to paste.
+- **The crons are Worker cron triggers**, not the Workflow binding's own `schedules`: those
+  need a paid plan. The free allowance is 5 cron expressions across the whole Cloudflare
+  account, and targets sharing an expression share one trigger.
 - **Lookup is verbatim.** Cloudflare returns the literal string it was configured with, so
   `0 */1 * * *` and `0 * * * *` are different keys even though cron treats them alike.
 
 ## Adding a target
 
 1. Add an entry to `TARGETS` in `src/targets.ts`.
-2. Add the same cron string, character for character, to `schedules` in `wrangler.jsonc`.
+2. Add the same cron string, character for character, to `triggers.crons` in
+   `wrangler.jsonc`.
 3. Install the GitHub App on the target repo (App settings -> Install App -> Configure).
 4. Confirm the target's workflow has all three of these. Nothing here can check them, and a
    target failing any of them is dispatched into silence:
@@ -43,7 +50,7 @@ Two things to know before editing anything:
 ## Removing a target
 
 1. Delete its entry from `src/targets.ts`.
-2. Delete its cron from `schedules` in `wrangler.jsonc` -- unless another target still
+2. Delete its cron from `triggers.crons` in `wrangler.jsonc` -- unless another target still
    claims that exact string.
 3. `task check`, then push to `main`.
 4. Optional: uninstall the App from that repo, and check its `schedule:` block is still
@@ -124,11 +131,14 @@ pull request without touching Cloudflare.
 | `task targets` | what gets dispatched and when, read from `src/targets.ts` |
 | `task runs` | recent runs of each target; `workflow_dispatch` ones came from here |
 | `task deploy` | deploy by hand; pushing to `main` already does this |
+| `task dev` | run it locally; `/__scheduled?cron=...` fires a slot for real |
 | `task logs` | live logs from the deployed Worker |
 | `task instances` | recent Workflow instances, one per cron that fired |
 | `task instance` | one instance's steps, retries and errors (`ID=<id>`, default latest) |
 | `task pkcs8`, `task secrets` | the setup steps above |
 
-There is no way to test a dispatch by hand: an instance created without a cron has nothing
-to look up, so `wrangler workflows trigger` throws on purpose. To try a change end to end,
-add a temporary `*/5 * * * *` schedule and target, watch `task runs`, then revert.
+To try a change end to end, `task dev` serves the Worker locally and
+`curl 'http://localhost:8787/__scheduled?cron=30+3+*+*+*'` fires that slot. It needs the
+three secrets in a `.dev.vars` file, and it dispatches for real -- the run appears in the
+target repo. `wrangler workflows trigger` is not the way: an instance created without a
+cron has nothing to look up, so it throws on purpose.

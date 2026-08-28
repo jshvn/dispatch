@@ -9,20 +9,20 @@ import { selectTargets, TARGETS } from "../src/targets"
 const wrangler = JSON.parse(
   readFileSync(join(import.meta.dirname, "../wrangler.jsonc"), "utf8").replace(/^\s*\/\/.*$/gm, ""),
 )
-const schedules: string[] = wrangler.workflows[0].schedules
+const schedules: string[] = wrangler.triggers.crons
 
 // The fragile seam: the same cron strings live in two files, and a mismatch means either a
-// schedule that fires into nothing or a target that never runs. Neither is visible at deploy.
-describe("targets and wrangler schedules agree", () => {
-  it("every target's cron is scheduled in wrangler.jsonc", () => {
+// trigger that fires into nothing or a target that never runs. Neither is visible at deploy.
+describe("targets and wrangler cron triggers agree", () => {
+  it("every target's cron is a trigger in wrangler.jsonc", () => {
     const missing = TARGETS.filter((t) => !schedules.includes(t.cron))
     expect(
       missing,
-      `add to wrangler schedules: ${JSON.stringify(missing.map((t) => t.cron))}`,
+      `add to wrangler triggers.crons: ${JSON.stringify(missing.map((t) => t.cron))}`,
     ).toEqual([])
   })
 
-  it("every wrangler schedule is claimed by a target", () => {
+  it("every wrangler cron trigger is claimed by a target", () => {
     const crons = new Set(TARGETS.map((t) => t.cron))
     expect(schedules.filter((c) => !crons.has(c))).toEqual([])
   })

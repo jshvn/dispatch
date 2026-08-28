@@ -10,7 +10,8 @@
 //   3. The workload pings its own healthcheck. This repo never learns whether a run passed,
 //      so a workload without one is unmonitored.
 //
-// `cron` must appear verbatim in wrangler.jsonc's schedules; the tests assert it both ways.
+// `cron` must appear verbatim in wrangler.jsonc's triggers.crons; the tests assert it both
+// ways. The free plan allows 5 cron expressions per Cloudflare account, in total.
 
 export type Target = {
   /** "owner/name" */

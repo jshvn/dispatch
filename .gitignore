@@ -2,5 +2,6 @@ node_modules/
 .wrangler/
 worker-configuration.d.ts
 
-# GitHub App private keys; never in the repo.
+# GitHub App private keys and the local secrets file; never in the repo.
 *.pem
+.dev.vars

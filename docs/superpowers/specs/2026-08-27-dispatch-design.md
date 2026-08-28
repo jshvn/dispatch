@@ -19,13 +19,16 @@ started by this scheduler, by hand, or by the GitHub cron left in place as a fal
 ## Architecture
 
     wrangler.jsonc
-      workflows[0].schedules = ["42 * * * *", "30 3 * * *", ...]
+      triggers.crons = ["42 * * * *", "30 3 * * *", ...]
             |
-            |  Cloudflare creates one instance per cron match
+            |  Cloudflare invokes `scheduled` once per cron match
             v
-    Dispatcher workflow instance
-      event.schedule.cron           <- the expression that fired
-      event.schedule.scheduledTime  <- intended slot, ms epoch
+    scheduled(controller)  ->  DISPATCH.create({ params })
+            |
+            v
+    Dispatch workflow instance
+      event.payload.cron           <- the expression that fired
+      event.payload.scheduledTime  <- intended slot, ms epoch
             |
             |  step "dispatch <repo> <workflow>"  one per matching target;
             |    mints its own installation token, then POSTs
@@ -40,7 +43,7 @@ started by this scheduler, by hand, or by the GitHub cron left in place as a fal
     Workload runs and pings its own healthcheck on success
 
 Cloudflare parses the cron. There is no cron matcher in this repo, and no scheduling
-state -- an instance is a pure function of `(event.schedule.cron, targets)`.
+state -- an instance is a pure function of `(the cron that fired, targets)`.
 
 ## Configuration
 
@@ -49,7 +52,7 @@ state -- an instance is a pure function of `(event.schedule.cron, targets)`.
     export type Target = {
       repo: string                        // "jshvn/ctan"
       workflow: string                    // "sync.yml"
-      cron: string                        // verbatim in wrangler schedules
+      cron: string                        // verbatim in wrangler triggers.crons
       ref?: string                        // default "main"
       inputs?: Record<string, string>
     }
@@ -58,26 +61,30 @@ state -- an instance is a pure function of `(event.schedule.cron, targets)`.
       { repo: "jshvn/ctan", workflow: "sync.yml", cron: "42 * * * *" },
     ]
 
-`wrangler.jsonc` carries the same cron strings on the workflow binding:
+`wrangler.jsonc` carries the same cron strings as Worker cron triggers:
 
+    "triggers": { "crons": ["42 * * * *"] },
     "workflows": [{
-      "name": "dispatcher",
-      "binding": "DISPATCHER",
-      "class_name": "Dispatcher",
-      "schedules": ["42 * * * *"]
+      "name": "dispatch",
+      "binding": "DISPATCH",
+      "class_name": "Dispatch"
     }]
+
+Cron triggers, not the workflow binding's own `schedules`. Those are a paid-plan feature --
+`wrangler deploy` rejects them on the free plan -- and they are the reason `scheduled`
+exists here at all: it does nothing but create the instance and hand it the expression.
 
 Two files holding the same cron strings is the one fragile seam in the design. A test
 asserts they agree and prints the exact array to paste when they do not. Generating the
-wrangler schedules from `TARGETS` would make the seam impossible to break; it costs a
+wrangler crons from `TARGETS` would make the seam impossible to break; it costs a
 build step, and the test is enough until the list is long.
 
 ### Invariants
 
 Machine-checked:
 
-1. Every `target.cron` appears in `wrangler.jsonc`'s `schedules`.
-2. Every schedule in `wrangler.jsonc` is claimed by at least one target.
+1. Every `target.cron` appears in `wrangler.jsonc`'s `triggers.crons`.
+2. Every cron trigger in `wrangler.jsonc` is claimed by at least one target.
 3. Every `(repo, workflow)` pair appears once.
 
 Checklist, in the README and the PR template, because this repo cannot verify them:
@@ -126,7 +133,7 @@ Everything sits on the Workers Free plan. Billing for Workflows steps and storag
 | --- | --- | --- |
 | Workflow steps | 3,000 / day | ~26 / day (0.9%) |
 | Requests | 100,000 / day | ~26 / day |
-| Cron expressions per account | 100 (workflow schedules) | 4 |
+| Cron triggers per account | 5 | 2 |
 | Subrequests per invocation | 50 | 2 per target |
 | Storage | 1 GB | none |
 | Concurrent instances | 100 | 1 |
@@ -134,8 +141,10 @@ Everything sits on the Workers Free plan. Billing for Workflows steps and storag
 Step arithmetic: one step per target per fire. ctan hourly is 24 steps/day; tlnet daily 1;
 ecc weekly and monthly round to nothing.
 
-Workers cron triggers are capped at 5 per account on the free plan, but workflow
-`schedules` are a separate allowance of 100. This repo uses zero Workers cron triggers.
+Cron triggers are capped at 5 per Cloudflare account on the free plan, and this repo holds
+two of them. The workflow binding's own `schedules` are a separate allowance of 100, but
+they need a paid plan, so the 5 is the real ceiling. Targets sharing one expression share
+one trigger.
 
 Verified 2026-08-27 against the Cloudflare docs. Re-check before adding a design that
 polls run outcomes: polling costs roughly 13 steps per run instead of 2.
@@ -146,7 +155,7 @@ polls run outcomes: polling costs roughly 13 steps per run instead of 2.
 | --- | --- | --- |
 | Dispatch returns 5xx | step retries 3x with backoff, then the instance fails | workload's healthcheck grace expires |
 | App key wrong or revoked | every dispatch fails | every workload's healthcheck fires at once |
-| Cloudflare drops a schedule | that slot is lost, next slot proceeds | absorbed by the workload's grace |
+| Cloudflare drops a firing | that slot is lost, next slot proceeds | absorbed by the workload's grace |
 | Target repo renamed or deleted | 404 after retries | that workload's healthcheck fires |
 | Target has no healthcheck | silent | nothing. See invariant 6 |
 | This repo is broken entirely | nothing dispatches | every workload's healthcheck fires |
@@ -161,7 +170,7 @@ The one runnable check is `vitest run`, covering the parts that can break silent
 All of it lives in `test/dispatch.test.ts`:
 
 - The invariants above, read straight out of `wrangler.jsonc`. This is the fragile seam.
-- `selectTargets` -- the right targets for a given `event.schedule.cron`, including two
+- `selectTargets` -- the right targets for a given cron expression, including two
   targets sharing one expression, and no match for an equivalent-but-different string.
 - `appJwt` -- the signed JWT carries the header and claims GitHub accepts and verifies
   against the matching public key, using a key generated in the test. A PKCS#1 key is
@@ -171,14 +180,15 @@ All of it lives in `test/dispatch.test.ts`:
 `fetch` is injected into the dispatch path, so no test touches the network.
 
 Unit tests cannot prove the GitHub App contract. One manual smoke does: deploy, add a
-`*/5 * * * *` schedule pointing at a scratch repo, confirm a run appears within ten
-minutes, remove the schedule.
+`*/5 * * * *` trigger pointing at a scratch repo, confirm a run appears within ten
+minutes, remove it. `wrangler dev --test-scheduled` fires the handler locally against the
+real GitHub App, which is the cheaper half of the same proof.
 
 ## Deployment
 
 - Push to `main` runs `wrangler deploy` from GitHub Actions, using `CLOUDFLARE_API_TOKEN`.
 - Pull requests run `biome check`, `tsc --noEmit`, `vitest run`, `wrangler deploy --dry-run`.
-- `schedules` on a workflow binding needs a recent Wrangler; pin it in `package.json`.
+- Wrangler is pinned in `package.json`; `triggers.crons` needs a recent one.
 
 ## Rollout
 
@@ -195,12 +205,12 @@ fallback for this repo being broken.
 
 Each is a deliberate simplification with a named upgrade path.
 
-- **No backfill.** A dropped Cloudflare schedule loses that slot outright. Upgrade:
+- **No backfill.** A dropped Cloudflare firing loses that slot outright. Upgrade:
   persist the last fire time per target and evaluate the gap on the next instance.
 - **No outcome monitoring.** This repo learns nothing about whether a run passed. Upgrade:
   a per-target `monitor: "scheduler"` mode that correlates the dispatch to a run id via a
   UUID input surfaced as `run-name`, polls to completion, and pings on the workload's
   behalf. Costs roughly 13 steps per run instead of 2, and requires editing the target
   workflow.
-- **Config lives in two files.** Upgrade: generate the wrangler schedules from `TARGETS`.
+- **Config lives in two files.** Upgrade: generate `triggers.crons` from `TARGETS`.
 - **Dispatches sharing one cron are capped at ~48** by the 50-subrequest ceiling.
