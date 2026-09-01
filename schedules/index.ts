@@ -23,6 +23,7 @@
 // with node's own resolver, which does not guess one. tsconfig.json allows it.
 
 import ctan from "./ctan.ts"
+import terraform from "./terraform.ts"
 import tlnet from "./tlnet.ts"
 
 export type Workflow = {
@@ -47,7 +48,7 @@ export type Target = Workflow & { repo: string }
 
 // Annotated here rather than in each repo file, so a leaf stays plain data with no import
 // of its own. A typo in one still fails to compile; it fails on this line.
-const REPOS: readonly Repo[] = [ctan, tlnet]
+const REPOS: readonly Repo[] = [ctan, terraform, tlnet]
 
 export const TARGETS: readonly Target[] = REPOS.flatMap((r) =>
   r.workflows.map((w) => ({ repo: r.repo, ...w })),
