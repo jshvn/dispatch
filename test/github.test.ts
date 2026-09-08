@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { appJwt, dispatchWorkflow, isFatal } from "../src/github"
+import { appJwt, dispatchWorkflow, isFatal, repoInstallation } from "../src/github"
 
-// src/github.ts: the App JWT, and the one POST that starts a workflow. No network -- appJwt
-// is verified against a key generated here, and dispatchWorkflow is handed its own fetch.
+// src/github.ts: the App JWT, the installation lookup, and the one POST that starts a
+// workflow. No network -- appJwt is verified against a key generated here, and the two
+// requests are handed their own fetch.
 
 const PEM_HEAD = `-----BEGIN ${"PRIVATE KEY"}-----`
 const PEM_TAIL = `-----END ${"PRIVATE KEY"}-----`
@@ -58,16 +59,51 @@ describe("appJwt", () => {
   })
 })
 
+/** A fetch answering every call with one status and body, remembering what it was asked. */
+const responding = (status: number, body: string | null = null) => {
+  const calls: { url: string; init: RequestInit }[] = []
+  const fetch = async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), init: init as RequestInit })
+    return new Response(body, { status })
+  }
+  return { calls, fetch: fetch as unknown as typeof globalThis.fetch }
+}
+
+describe("repoInstallation", () => {
+  it("asks for the repo's installation with the App JWT and returns its id", async () => {
+    const { calls, fetch } = responding(200, JSON.stringify({ id: 12345678 }))
+    const id = await repoInstallation("jwt", "katoptra/tlnet", fetch)
+
+    expect(id).toBe("12345678")
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/katoptra/tlnet/installation")
+    expect(calls[0]?.init.method).toBeUndefined()
+    expect((calls[0]?.init.headers as Record<string, string>).authorization).toBe("Bearer jwt")
+  })
+
+  // The message is the diagnosis: the App is installed per account, and a 404 here means
+  // this repo's owner is not one of them. isFatal makes it a hard failure.
+  it("names the repo and fails for good when the App is not installed there", async () => {
+    const { fetch } = responding(404, "Not Found")
+    const err = await repoInstallation("jwt", "katoptra/new-mirror", fetch).catch((e) => e)
+    expect(err.message).toMatch(/App is not installed on katoptra\/new-mirror/)
+    expect(isFatal(err)).toBe(true)
+  })
+
+  it("leaves a server error retryable", async () => {
+    const { fetch } = responding(502, "bad gateway")
+    const err = await repoInstallation("jwt", "katoptra/tlnet", fetch).catch((e) => e)
+    expect(err.message).toMatch(/502/)
+    expect(isFatal(err)).toBe(false)
+  })
+
+  it("throws when the answer carries no id", async () => {
+    const { fetch } = responding(200, "{}")
+    await expect(repoInstallation("jwt", "katoptra/tlnet", fetch)).rejects.toThrow(/no id/)
+  })
+})
+
 describe("dispatchWorkflow", () => {
   const target = { repo: "jshvn/ctan", workflow: "sync.yml" }
-  const responding = (status: number, body: string | null = null) => {
-    const calls: { url: string; init: RequestInit }[] = []
-    const fetch = async (url: string | URL | Request, init?: RequestInit) => {
-      calls.push({ url: String(url), init: init as RequestInit })
-      return new Response(body, { status })
-    }
-    return { calls, fetch: fetch as unknown as typeof globalThis.fetch }
-  }
 
   it("posts to the dispatches endpoint, defaulting the ref to main", async () => {
     const { calls, fetch } = responding(204)

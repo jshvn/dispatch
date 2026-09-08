@@ -44,7 +44,7 @@ tasks:
           "" \
           "${c}cloudflare -- needs wrangler credentials${r}" \
           "  task dev          Serve locally; /__scheduled?cron=<expr> fires that slot for real" \
-          "                    ${d}needs .dev.vars with the three secrets; it dispatches to GitHub${r}" \
+          "                    ${d}needs .dev.vars with the two secrets; it dispatches to GitHub${r}" \
           "  task deploy       Deploy by hand; pushing to main does this already" \
           "  task logs         Live logs (wrangler tail)" \
           "  task instances    Recent Workflow instances" \
@@ -52,7 +52,7 @@ tasks:
           "" \
           "${c}setup -- once, by hand; README.md has the whole procedure${r}" \
           "  task pkcs8        Convert the GitHub App key to the PKCS#8 WebCrypto imports" \
-          "  task secrets      Set the three Worker secrets on Cloudflare" \
+          "  task secrets      Set the two Worker secrets on Cloudflare" \
           "" \
           "${d}prove a dispatch for real, in production:${r}" \
           "${d}  npx wrangler workflows trigger dispatch '{\"cron\":\"42 * * * *\",\"scheduledTime\":0}'${r}" \
@@ -107,7 +107,7 @@ tasks:
         rm -rf node_modules .wrangler worker-configuration.d.ts
         echo "removed node_modules/, .wrangler/ and worker-configuration.d.ts"
         # A .pem is an App private key GitHub will not hand out twice, and .dev.vars holds
-        # the three secrets task dev needs. Both are gitignored, neither is something this
+        # the two secrets task dev needs. Both are gitignored, neither is something this
         # can rebuild, and a .pem still here is a live credential worth pointing at.
         for f in .dev.vars *.pem; do
           if [ -e "$f" ]; then echo "kept $f -- nothing here can rebuild it"; fi
@@ -165,7 +165,7 @@ tasks:
 
   dev:
     desc: Serve locally - GET /__scheduled?cron=<expr> fires that slot, dispatching for real
-    # --test-scheduled is what exposes /__scheduled. The three Worker secrets have to be in
+    # --test-scheduled is what exposes /__scheduled. The two Worker secrets have to be in
     # .dev.vars (git-ignored), or every dispatch step fails on the App JWT.
     deps: [installed]
     cmds: ['npx wrangler dev --test-scheduled']
@@ -197,13 +197,12 @@ tasks:
       - 'echo "wrote {{.OUT}} -- task secrets reads it, then delete both .pem files"'
 
   secrets:
-    desc: Set the three Worker secrets on Cloudflare - KEY=app.pkcs8.pem
+    desc: Set the two Worker secrets on Cloudflare - KEY=app.pkcs8.pem
     vars:
       KEY: '{{.KEY | default "app.pkcs8.pem"}}'
     deps: [installed]
     cmds:
       - 'npx wrangler secret put GITHUB_APP_ID'
-      - 'npx wrangler secret put GITHUB_APP_INSTALLATION_ID'
       # Piped, not prompted. `wrangler secret put` reads a single line when it has a
       # terminal, so a pasted PEM would store its BEGIN line and nothing else -- and that is
       # a non-empty value, which wrangler accepts. Given no TTY it reads stdin to the end.

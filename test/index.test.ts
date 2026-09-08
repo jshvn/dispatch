@@ -1,4 +1,5 @@
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers"
+import { NonRetryableError } from "cloudflare:workflows"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { crons, selectTargets, TARGETS } from "../schedules"
 import type { Env, Params } from "../src/index"
@@ -8,13 +9,22 @@ import type { Env, Params } from "../src/index"
 // instance, and that the fetch handler stays inert.
 vi.mock("../src/github", () => ({
   appJwt: vi.fn(async () => "jwt"),
-  installationToken: vi.fn(async () => "tok"),
+  repoInstallation: vi.fn(async (_jwt: string, repo: string) => `inst-${repo.split("/")[0]}`),
+  installationToken: vi.fn(async (_jwt: string, id: string) => `tok-${id}`),
   dispatchWorkflow: vi.fn(async () => undefined),
   isFatal: vi.fn(() => false),
 }))
 
+// The registry stays real; only selectTargets is wrapped, so one test can hand the instance
+// a cron with a shape schedules/ does not have today, such as two targets under one owner.
+vi.mock("../schedules", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../schedules")>()
+  return { ...real, selectTargets: vi.fn(real.selectTargets) }
+})
+
 const { Dispatch, default: worker, instanceId } = await import("../src/index")
 const github = await import("../src/github")
+const schedules = await import("../schedules")
 
 /** An env whose Workflow binding records every instance asked for and creates none. */
 const recordingEnv = () => {
@@ -30,7 +40,6 @@ const recordingEnv = () => {
     },
     GITHUB_APP_ID: "1",
     GITHUB_APP_PRIVATE_KEY: "pem",
-    GITHUB_APP_INSTALLATION_ID: "2",
   }
   return { created, env: env as unknown as Env }
 }
@@ -168,7 +177,19 @@ describe("instanceId", () => {
 })
 
 describe("Dispatch.run", () => {
-  beforeEach(() => vi.mocked(github.dispatchWorkflow).mockClear())
+  beforeEach(() => {
+    vi.mocked(github.repoInstallation).mockClear()
+    vi.mocked(github.installationToken).mockClear()
+    vi.mocked(github.dispatchWorkflow).mockClear()
+    vi.mocked(schedules.selectTargets).mockClear()
+  })
+
+  /** What the mocked GitHub saw: (repo looked up, installation minted, token dispatched with). */
+  const seen = () => ({
+    lookedUp: vi.mocked(github.repoInstallation).mock.calls.map(([, repo]) => repo),
+    minted: vi.mocked(github.installationToken).mock.calls.map(([, id]) => id),
+    dispatched: vi.mocked(github.dispatchWorkflow).mock.calls.map(([tok, t]) => [tok, t.repo]),
+  })
 
   it("throws when the instance carries no cron", async () => {
     const { env } = recordingEnv()
@@ -210,5 +231,79 @@ describe("Dispatch.run", () => {
     // Step output persists for three days. A token reaching it would be a stored credential.
     expect(vi.mocked(github.installationToken)).toHaveBeenCalled()
     for (const out of outputs) expect(JSON.stringify(out)).not.toContain("tok")
+  })
+
+  it("resolves the installation from the target's repo, not from a secret", async () => {
+    const { env } = recordingEnv()
+    const target = TARGETS[0] as (typeof TARGETS)[number]
+
+    await runWith({ cron: target.cron, scheduledTime: 0 }, env, recordingStep().step)
+
+    expect(seen()).toEqual({
+      lookedUp: [target.repo],
+      minted: [`inst-${target.repo.split("/")[0]}`],
+      dispatched: [[`tok-inst-${target.repo.split("/")[0]}`, target.repo]],
+    })
+  })
+
+  it("looks up and mints once for a burst of targets under one owner", async () => {
+    const { env } = recordingEnv()
+    const cron = "0 5 * * *"
+    vi.mocked(schedules.selectTargets).mockReturnValueOnce([
+      { repo: "katoptra/tlnet", workflow: "sync.yml", cron },
+      { repo: "katoptra/ctan", workflow: "sync.yml", cron },
+    ])
+
+    const out = await runWith({ cron, scheduledTime: 0 }, env, recordingStep().step)
+
+    expect(seen()).toEqual({
+      lookedUp: ["katoptra/tlnet"],
+      minted: ["inst-katoptra"],
+      dispatched: [
+        ["tok-inst-katoptra", "katoptra/tlnet"],
+        ["tok-inst-katoptra", "katoptra/ctan"],
+      ],
+    })
+    expect(out.dispatched).toEqual(["katoptra/tlnet/sync.yml", "katoptra/ctan/sync.yml"])
+  })
+
+  it("keeps two owners on two installations and two tokens", async () => {
+    const { env } = recordingEnv()
+    const cron = "0 5 * * *"
+    vi.mocked(schedules.selectTargets).mockReturnValueOnce([
+      { repo: "jshvn/ctan", workflow: "sync.yml", cron },
+      { repo: "katoptra/tlnet", workflow: "sync.yml", cron },
+    ])
+
+    await runWith({ cron, scheduledTime: 0 }, env, recordingStep().step)
+
+    expect(seen()).toEqual({
+      lookedUp: ["jshvn/ctan", "katoptra/tlnet"],
+      minted: ["inst-jshvn", "inst-katoptra"],
+      dispatched: [
+        ["tok-inst-jshvn", "jshvn/ctan"],
+        ["tok-inst-katoptra", "katoptra/tlnet"],
+      ],
+    })
+  })
+
+  // A repo the App is not installed on answers the lookup with a 404, which isFatal routes
+  // to a hard failure. The message has to name the repo, since that is the whole diagnosis.
+  it("fails the step for good when the App is not installed on the repo", async () => {
+    const { env } = recordingEnv()
+    const cron = "0 5 * * *"
+    vi.mocked(schedules.selectTargets).mockReturnValueOnce([
+      { repo: "katoptra/new-mirror", workflow: "sync.yml", cron },
+    ])
+    vi.mocked(github.repoInstallation).mockRejectedValueOnce(
+      new Error("App is not installed on katoptra/new-mirror"),
+    )
+    vi.mocked(github.isFatal).mockReturnValueOnce(true)
+
+    const err = await runWith({ cron, scheduledTime: 0 }, env, recordingStep().step).catch((e) => e)
+
+    expect(err).toBeInstanceOf(NonRetryableError)
+    expect(err.message).toMatch(/not installed on katoptra\/new-mirror/)
+    expect(seen().dispatched).toEqual([])
   })
 })

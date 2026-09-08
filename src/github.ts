@@ -1,4 +1,5 @@
-// Minting an installation token and dispatching a workflow. No SDK: two requests.
+// Finding the App's installation on a repo, minting its token, and dispatching a workflow.
+// No SDK: three requests.
 
 const API = "https://api.github.com"
 const UA = "jshvn-dispatch"
@@ -74,6 +75,27 @@ const headers = (auth: string) => ({
   "x-github-api-version": "2022-11-28",
   "user-agent": UA,
 })
+
+/**
+ * The id of the App's installation on one repo, resolved with the App JWT. An installation
+ * belongs to an account, so every repo under one owner answers with the same id. GitHub
+ * answers 404 when the App is not installed there, which is a fatal status: the step fails
+ * now and names the repo.
+ */
+export const repoInstallation = async (
+  jwt: string,
+  repo: string,
+  fetch: typeof globalThis.fetch = globalThis.fetch,
+): Promise<string> => {
+  const res = await fetch(`${API}/repos/${repo}/installation`, { headers: headers(jwt) })
+  if (res.status === 404)
+    throw new GitHubError(404, `App is not installed on ${repo}: ${await res.text()}`)
+  if (!res.ok)
+    throw new GitHubError(res.status, `installation for ${repo}: ${res.status} ${await res.text()}`)
+  const body = (await res.json()) as { id?: number }
+  if (body.id === undefined) throw new Error(`installation for ${repo}: response carried no id`)
+  return String(body.id)
+}
 
 /** Exchange an App JWT for an installation token. Valid one hour; never persisted. */
 export const installationToken = async (
