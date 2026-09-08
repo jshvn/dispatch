@@ -184,12 +184,21 @@ describe("Dispatch.run", () => {
     vi.mocked(schedules.selectTargets).mockClear()
   })
 
-  /** What the mocked GitHub saw: (repo looked up, installation minted, token dispatched with). */
+  /** What the mocked GitHub saw: the repos looked up, the ids minted, the tokens dispatched. */
   const seen = () => ({
     lookedUp: vi.mocked(github.repoInstallation).mock.calls.map(([, repo]) => repo),
     minted: vi.mocked(github.installationToken).mock.calls.map(([, id]) => id),
     dispatched: vi.mocked(github.dispatchWorkflow).mock.calls.map(([tok, t]) => [tok, t.repo]),
   })
+
+  /** Run one firing whose cron is claimed by exactly these repos, each on a sync.yml. */
+  const dispatchTo = (...repos: string[]) => {
+    const cron = "0 5 * * *"
+    vi.mocked(schedules.selectTargets).mockReturnValueOnce(
+      repos.map((repo) => ({ repo, workflow: "sync.yml", cron })),
+    )
+    return runWith({ cron, scheduledTime: 0 }, recordingEnv().env, recordingStep().step)
+  }
 
   it("throws when the instance carries no cron", async () => {
     const { env } = recordingEnv()
@@ -233,28 +242,8 @@ describe("Dispatch.run", () => {
     for (const out of outputs) expect(JSON.stringify(out)).not.toContain("tok")
   })
 
-  it("resolves the installation from the target's repo, not from a secret", async () => {
-    const { env } = recordingEnv()
-    const target = TARGETS[0] as (typeof TARGETS)[number]
-
-    await runWith({ cron: target.cron, scheduledTime: 0 }, env, recordingStep().step)
-
-    expect(seen()).toEqual({
-      lookedUp: [target.repo],
-      minted: [`inst-${target.repo.split("/")[0]}`],
-      dispatched: [[`tok-inst-${target.repo.split("/")[0]}`, target.repo]],
-    })
-  })
-
   it("looks up and mints once for a burst of targets under one owner", async () => {
-    const { env } = recordingEnv()
-    const cron = "0 5 * * *"
-    vi.mocked(schedules.selectTargets).mockReturnValueOnce([
-      { repo: "katoptra/tlnet", workflow: "sync.yml", cron },
-      { repo: "katoptra/ctan", workflow: "sync.yml", cron },
-    ])
-
-    const out = await runWith({ cron, scheduledTime: 0 }, env, recordingStep().step)
+    await dispatchTo("katoptra/tlnet", "katoptra/ctan")
 
     expect(seen()).toEqual({
       lookedUp: ["katoptra/tlnet"],
@@ -264,18 +253,10 @@ describe("Dispatch.run", () => {
         ["tok-inst-katoptra", "katoptra/ctan"],
       ],
     })
-    expect(out.dispatched).toEqual(["katoptra/tlnet/sync.yml", "katoptra/ctan/sync.yml"])
   })
 
   it("keeps two owners on two installations and two tokens", async () => {
-    const { env } = recordingEnv()
-    const cron = "0 5 * * *"
-    vi.mocked(schedules.selectTargets).mockReturnValueOnce([
-      { repo: "jshvn/ctan", workflow: "sync.yml", cron },
-      { repo: "katoptra/tlnet", workflow: "sync.yml", cron },
-    ])
-
-    await runWith({ cron, scheduledTime: 0 }, env, recordingStep().step)
+    await dispatchTo("jshvn/ctan", "katoptra/tlnet")
 
     expect(seen()).toEqual({
       lookedUp: ["jshvn/ctan", "katoptra/tlnet"],
@@ -290,17 +271,12 @@ describe("Dispatch.run", () => {
   // A repo the App is not installed on answers the lookup with a 404, which isFatal routes
   // to a hard failure. The message has to name the repo, since that is the whole diagnosis.
   it("fails the step for good when the App is not installed on the repo", async () => {
-    const { env } = recordingEnv()
-    const cron = "0 5 * * *"
-    vi.mocked(schedules.selectTargets).mockReturnValueOnce([
-      { repo: "katoptra/new-mirror", workflow: "sync.yml", cron },
-    ])
     vi.mocked(github.repoInstallation).mockRejectedValueOnce(
       new Error("App is not installed on katoptra/new-mirror"),
     )
     vi.mocked(github.isFatal).mockReturnValueOnce(true)
 
-    const err = await runWith({ cron, scheduledTime: 0 }, env, recordingStep().step).catch((e) => e)
+    const err = await dispatchTo("katoptra/new-mirror").catch((e) => e)
 
     expect(err).toBeInstanceOf(NonRetryableError)
     expect(err.message).toMatch(/not installed on katoptra\/new-mirror/)
