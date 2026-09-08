@@ -13,7 +13,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers"
 import { NonRetryableError } from "cloudflare:workflows"
 import { selectTargets } from "../schedules"
-import { appJwt, dispatchWorkflow, installationToken, isFatal } from "./github"
+import { appJwt, dispatchWorkflow, installationToken, isFatal, repoInstallation } from "./github"
 
 /** What `scheduled` hands the instance. The cron string is the whole lookup key. */
 export type Params = {
@@ -33,7 +33,6 @@ export type Env = Cloudflare.Env & {
   GITHUB_APP_ID: string
   /** PKCS#8 PEM. See the conversion note in github.ts. */
   GITHUB_APP_PRIVATE_KEY: string
-  GITHUB_APP_INSTALLATION_ID: string
 }
 
 // A dispatch is a single POST. Retrying it is safe: the target's concurrency group keeps at
@@ -42,6 +41,27 @@ const RETRY = {
   retries: { limit: 3, delay: "10 seconds", backoff: "exponential" },
   timeout: "1 minute",
 } as const
+
+/**
+ * An installation token for one repo. The App is installed per account, so the token is
+ * cached by owner: a firing with several targets under one owner looks the installation up
+ * and mints once. The cache lives in memory for this invocation of `run` only -- never in
+ * a step's output, which persists three days -- so a restarted instance simply mints again.
+ *
+ * ponytail: the cache trusts the owner, not the repo. A repo an installation excludes still
+ * gets that owner's token when a sibling resolved first in the same firing, and fails at the
+ * dispatch with a plain 404 instead of the "not installed" message. Keying by repo would
+ * cost the lookup per target; the README says which install covers which owner.
+ */
+const tokenFor = async (env: Env, cache: Map<string, string>, repo: string): Promise<string> => {
+  const owner = repo.split("/")[0] as string
+  const cached = cache.get(owner)
+  if (cached) return cached
+  const jwt = await appJwt(env.GITHUB_APP_ID, env.GITHUB_APP_PRIVATE_KEY)
+  const token = await installationToken(jwt, await repoInstallation(jwt, repo))
+  cache.set(owner, token)
+  return token
+}
 
 export class Dispatch extends WorkflowEntrypoint<Env, Params> {
   async run(event: WorkflowEvent<Params>, step: WorkflowStep) {
@@ -53,19 +73,20 @@ export class Dispatch extends WorkflowEntrypoint<Env, Params> {
     // reaches production, failing loudly beats a schedule that silently does nothing.
     if (targets.length === 0) throw new Error(`no target in schedules/ claims cron "${cron}"`)
 
+    const tokens = new Map<string, string>()
     const dispatched: string[] = []
     for (const target of targets) {
-      // The token is minted inside the step rather than in one shared step above, so it is
-      // never written to workflow state (step output persists for 3 days). The cost is one
-      // extra subrequest per target.
+      // The token is resolved inside the step rather than in one shared step above, so it
+      // is never written to workflow state. The cost is two subrequests per owner per
+      // firing: one lookup, one mint.
       await step.do(`dispatch ${target.repo} ${target.workflow}`, RETRY, async () => {
         try {
-          const jwt = await appJwt(this.env.GITHUB_APP_ID, this.env.GITHUB_APP_PRIVATE_KEY)
-          const token = await installationToken(jwt, this.env.GITHUB_APP_INSTALLATION_ID)
+          const token = await tokenFor(this.env, tokens, target.repo)
           await dispatchWorkflow(token, target)
         } catch (err) {
-          // A 404 for a workflow file that is not there, a 403 for a permission the App was
-          // never granted: three retries only delay the message by a minute.
+          // A 404 for a workflow file that is not there, or for a repo the App is not
+          // installed on, a 403 for a permission the App was never granted: three retries
+          // only delay the message by a minute.
           if (isFatal(err)) throw new NonRetryableError((err as Error).message)
           throw err
         }

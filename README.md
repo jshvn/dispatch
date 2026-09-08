@@ -10,9 +10,11 @@ Once, by hand.
 
 1. Create an App under `jshvn` with one permission -- Repository permissions -> Actions ->
    Read and write -- and no webhook.
-2. Install it on the target repos.
-3. Note the App ID from the App's settings page, and the installation ID from the end of the
-   installation's URL.
+2. Install it on the `katoptra` organization with access to all repositories, so a repo
+   created or transferred there is covered without another step, and on `jshvn` for the
+   repos that stay there. The Worker finds each target's installation from its repo name at
+   dispatch time, so there is no installation ID to note.
+3. Note the App ID from the App's settings page.
 4. Generate a private key and convert it. GitHub issues PKCS#1; WebCrypto imports PKCS#8
    only.
 
@@ -22,8 +24,8 @@ Once, by hand.
 
 ### Worker secrets
 
-1. Run `task secrets`. It prompts for `GITHUB_APP_ID` and `GITHUB_APP_INSTALLATION_ID`, then
-   reads `GITHUB_APP_PRIVATE_KEY` from `app.pkcs8.pem`. `KEY=` points it at another path.
+1. Run `task secrets`. It prompts for `GITHUB_APP_ID`, then reads `GITHUB_APP_PRIVATE_KEY`
+   from `app.pkcs8.pem`. `KEY=` points it at another path.
 
    The key is piped rather than pasted because `wrangler secret put` reads a single line
    when it has a terminal: a pasted PEM would store its `BEGIN` line and nothing else, and
@@ -68,7 +70,9 @@ To add one:
 
 - Write `schedules/<name>.ts` and add its import to `schedules/index.ts`.
 - `task crons`.
-- Install the App on that repo.
+- Under `katoptra` the App already covers it. Under `jshvn`, add the repo to the App's
+  installation there. A repo the App cannot see fails its step for good with
+  `App is not installed on <owner>/<name>`, which `task inspect` shows.
 - Check three things in the target's own workflow. Nothing here can, and a target failing
   any of them is dispatched into silence:
   - `workflow_dispatch:` in its `on:` block, or the dispatch 404s.

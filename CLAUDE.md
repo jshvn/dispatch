@@ -13,7 +13,8 @@ Starts GitHub Actions workflows on a schedule, from a Cloudflare Workflow. GitHu
   types, the registry and `selectTargets`.
 - `wrangler.jsonc` -- the same expressions as Worker cron triggers, generated into it by
   `task crons`. Cloudflare parses them.
-- `src/github.ts` -- App JWT, installation token, `workflow_dispatch`. No SDK, two requests.
+- `src/github.ts` -- App JWT, installation lookup, installation token, `workflow_dispatch`.
+  No SDK, three requests.
 - `src/index.ts` -- `scheduled` creates one instance per firing, under `instanceId`. The
   instance dispatches every target claiming that cron, then ends.
 - `test/` -- one file per source it covers: `schedules.test.ts`, `github.test.ts`,
@@ -24,9 +25,12 @@ Starts GitHub Actions workflows on a schedule, from a Cloudflare Workflow. GitHu
 - It dispatches. It does not poll, monitor outcomes, or run work itself.
 - Free plan. 3,000 workflow steps a day, one step per target per fire. Polling outcomes
   would cost about 13 steps a run.
-- No secrets in the repo. Worker secrets `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` and
-  `GITHUB_APP_INSTALLATION_ID`, set with `task secrets`. Repo secrets
-  `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, for deploying.
+- No secrets in the repo. Worker secrets `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`, set
+  with `task secrets`. Repo secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, for
+  deploying.
+- One App, installed per account: on the `katoptra` organization with access to all
+  repositories, and on `jshvn` for the repos there. The installation is resolved from each
+  target's repo name, so nothing in the Worker names an owner.
 - The only network endpoint is `api.github.com`.
 - No cron parser. Cloudflare parses the expressions; this repo looks up strings.
 
@@ -53,9 +57,15 @@ Each of these fails silently, or only in production.
   `task targets` load that file with node's own resolver, which does not guess one.
   `allowImportingTsExtensions` in `tsconfig.json` is what lets tsc accept it.
 - **Lookup is verbatim.** `0 */1 * * *` and `0 * * * *` are different keys.
-- **Mint the installation token inside each dispatch step.** Step output persists three
-  days, so a shared token step would store a live credential. Costs one subrequest per
-  target.
+- **Resolve the installation and mint its token inside a dispatch step, never in a step of
+  their own.** Step output persists three days, so a shared token step would store a live
+  credential. `tokenFor` caches one token per owner in memory for the invocation: an
+  installation belongs to an account, so every repo under one owner shares it. Costs two
+  subrequests per owner per firing, none per extra target.
+- **A 404 from the installation lookup means the App is not installed on that repo's
+  owner.** The step fails for good with `App is not installed on <owner>/<name>`. A repo
+  created under `katoptra` is covered by that org's all-repositories install; one under
+  `jshvn` has to be added to that installation by hand.
 - **This is the targets' only clock, and it never learns whether a run passed.** Their
   workflows carry no `schedule:`. Each workload pings its own healthcheck; that is the only
   alert, and it is what catches this repo being the thing that broke.
@@ -132,5 +142,7 @@ the instance has no cron to look up and `run()` throws.
 - **A PEM private-key header in Bash tool text trips the secret-scan hook**, test fixtures
   included. `test/github.test.ts` builds the header from fragments. Write such files with
   Write or Edit.
+- **A transferred repo has to be renamed in `schedules/`.** GitHub answers the old name with
+  a redirect, and a redirected POST is not a dispatch.
 - **Check `npm view` before pinning anything.** TypeScript is on 7, vitest on 4;
   `@cloudflare/workers-types` is superseded by `wrangler types`.
