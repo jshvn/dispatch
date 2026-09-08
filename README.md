@@ -55,7 +55,7 @@ slash. It lists that repo's workflows and the cron each one runs on:
 ```ts
 // schedules/ctan.ts
 export default {
-  repo: "jshvn/ctan",
+  repo: "katoptra/ctan",
   workflows: [{ workflow: "sync.yml", cron: "42 * * * *" }],
 }
 ```
