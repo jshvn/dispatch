@@ -25,6 +25,7 @@
 
 import ctan from "./ctan.ts"
 import dropbox from "./dropbox.ts"
+import github from "./github.ts"
 import terraform from "./terraform.ts"
 import tlnet from "./tlnet.ts"
 
@@ -76,7 +77,7 @@ export type Target = Omit<Workflow, "slots"> & { repo: string; cron: string }
 // Annotated here rather than in each repo file, so a leaf stays plain data with no import
 // of its own. A leaf ends in `as const`, which is what keeps its slot names narrow enough to
 // check against SLOTS; a typo in one, or a leaf without it, fails to compile on this line.
-const REPOS: readonly Repo[] = [ctan, dropbox, terraform, tlnet]
+const REPOS: readonly Repo[] = [ctan, dropbox, github, terraform, tlnet]
 
 export const TARGETS: readonly Target[] = REPOS.flatMap((r) =>
   r.workflows.flatMap(({ slots, ...w }) =>
