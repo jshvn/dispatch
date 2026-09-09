@@ -1,5 +1,6 @@
 // What this scheduler starts, and when. One file per GitHub repo, named for the half of
-// "owner/name" after the slash; this file is the list of them.
+// "owner/name" after the slash; this file is the list of them, and the table of slots each
+// one registers its workflows in.
 //
 // Before adding a workflow to any of them, confirm all three. Nothing here can check them,
 // and a workflow that fails any of them is dispatched into silence:
@@ -27,11 +28,36 @@ import dropbox from "./dropbox.ts"
 import terraform from "./terraform.ts"
 import tlnet from "./tlnet.ts"
 
+/**
+ * The firing times, each a Cloudflare cron trigger of its own. The expressions are UTC; the
+ * names are Pacific, exact in winter and an hour early in summer. The dailies sit at :17
+ * and the hourly at :42, so no two slots share a minute and none is on the hour, which
+ * GitHub sheds first.
+ *
+ * One expression per slot rather than one four-hour daily: five is the free plan's whole
+ * budget, but a trigger Cloudflare drops then takes one slot's targets with it and not every
+ * daily's. Only a slot some workflow registers in becomes a trigger. Changing an expression
+ * here is a trigger change -- `task crons`, then up to 15 minutes before it fires.
+ */
+export const SLOTS = {
+  hourly: "42 * * * *",
+  /** 03:17 PST */
+  overnight: "17 11 * * *",
+  /** 09:17 PST */
+  morning: "17 17 * * *",
+  /** 15:17 PST */
+  afternoon: "17 23 * * *",
+  /** 21:17 PST */
+  evening: "17 5 * * *",
+} as const
+
+export type Slot = keyof typeof SLOTS
+
 export type Workflow = {
   /** workflow file name, e.g. "sync.yml" */
   workflow: string
-  /** 5-field cron, parsed by Cloudflare, not by us */
-  cron: string
+  /** where it runs; one is usual, a second is a second pass in the day. Never none. */
+  slots: readonly [Slot, ...Slot[]]
   /** git ref to run on; GitHub defaults to the default branch */
   ref?: string
   inputs?: Record<string, string>
@@ -44,21 +70,24 @@ export type Repo = {
   workflows: readonly Workflow[]
 }
 
-/** One workflow on one schedule -- everything a single dispatch needs. */
-export type Target = Workflow & { repo: string }
+/** One workflow in one slot -- everything a single dispatch needs, keyed by the cron. */
+export type Target = Omit<Workflow, "slots"> & { repo: string; cron: string }
 
 // Annotated here rather than in each repo file, so a leaf stays plain data with no import
-// of its own. A typo in one still fails to compile; it fails on this line.
+// of its own. A leaf ends in `as const`, which is what keeps its slot names narrow enough to
+// check against SLOTS; a typo in one, or a leaf without it, fails to compile on this line.
 const REPOS: readonly Repo[] = [ctan, dropbox, terraform, tlnet]
 
 export const TARGETS: readonly Target[] = REPOS.flatMap((r) =>
-  r.workflows.map((w) => ({ repo: r.repo, ...w })),
+  r.workflows.flatMap(({ slots, ...w }) =>
+    slots.map((slot) => ({ repo: r.repo, cron: SLOTS[slot], ...w })),
+  ),
 )
 
 /**
  * The cron expressions wrangler.jsonc must carry, which `task crons` writes there. Deduped,
- * because targets share expressions and the free plan allows 5 per Cloudflare account; and
- * sorted, so reordering the registry above does not rewrite generated JSON.
+ * because targets share slots; and sorted, so reordering the registry above does not
+ * rewrite generated JSON.
  */
 export const crons = (targets: readonly Target[] = TARGETS): string[] =>
   [...new Set(targets.map((t) => t.cron))].sort()

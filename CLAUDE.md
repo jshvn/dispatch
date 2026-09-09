@@ -8,9 +8,10 @@ Starts GitHub Actions workflows on a schedule, from a Cloudflare Workflow. GitHu
 ## The files
 
 - `schedules/` -- one file per GitHub repo, named for the half of `owner/name` after the
-  slash, listing that repo's workflows and the cron each one runs on. Routine changes touch
-  only this directory, then `task crons`. `schedules/index.ts` imports them all: it holds the
-  types, the registry and `selectTargets`.
+  slash, listing that repo's workflows and the slots each one runs in. Routine changes touch
+  only this directory. `schedules/index.ts` imports them all: it holds `SLOTS`, the five
+  named cron expressions, plus the types, the registry and `selectTargets`. A target's cron
+  is its slot's; the Worker only ever sees the cron.
 - `wrangler.jsonc` -- the same expressions as Worker cron triggers, generated into it by
   `task crons`. Cloudflare parses them.
 - `src/github.ts` -- App JWT, installation lookup, installation token, `workflow_dispatch`.
@@ -33,26 +34,34 @@ Starts GitHub Actions workflows on a schedule, from a Cloudflare Workflow. GitHu
   target's repo name, so nothing in the Worker names an owner.
 - The only network endpoint is `api.github.com`.
 - No cron parser. Cloudflare parses the expressions; this repo looks up strings.
+- One expression per slot, never a multi-hour daily. Cloudflare hands the Worker the same
+  string for every hour a list expression matches, so a target could not pick one of them;
+  and a trigger Cloudflare drops takes one slot down, not every daily.
 
 Accepted ceilings: no backfill, no outcome monitoring, the crons copied into
 `wrangler.jsonc` by a generator rather than read from one place, a registry that lists its
-own files by hand, and a subrequest budget that bounds how many targets one expression can
-carry.
+own files by hand, five slots and no per-target minute, and a subrequest budget that bounds
+how many targets one slot can carry.
 
 ## Must knows
 
 Each of these fails silently, or only in production.
 
 - **`wrangler.jsonc`'s crons are generated; do not edit them.** `task crons` writes
-  `triggers.crons` from `schedules/`. The strings are copied rather than shared because
-  `wrangler.jsonc` is JSON and cannot import. A target that is not also a trigger never runs;
-  a trigger no target claims throws every time it fires. `test/schedules.test.ts` fails until
-  the two match exactly, order included.
+  `triggers.crons` from `schedules/`: the expression of every slot some target is in, and no
+  other. The strings are copied rather than shared because `wrangler.jsonc` is JSON and
+  cannot import. A slot that is not also a trigger never runs; a trigger no target claims
+  throws every time it fires. `test/schedules.test.ts` fails until the two match exactly,
+  order included. Only a slot's first target, its last, or a change to `SLOTS` itself
+  moves the file.
 - **A file in `schedules/` that `index.ts` does not import never runs.** Workers bundling is
   static, so there is no glob and the import list is the registry. The tests read the
   directory and assert it against `TARGETS` both ways, matching a file name to the half of
   `owner/name` after the slash. `ponytail:` two owners with the same repo name would collide;
   the fix is `schedules/<owner>/<repo>.ts`.
+- **A leaf ends in `as const`.** Without it the slot names widen to `string`, and the
+  `REPOS` line in `schedules/index.ts` is where that fails to compile -- the same line a
+  misspelt slot fails on. The check lives there so a leaf stays data with no import.
 - **`schedules/index.ts` imports its leaves with a `.ts` extension.** `task crons` and
   `task targets` load that file with node's own resolver, which does not guess one.
   `allowImportingTsExtensions` in `tsconfig.json` is what lets tsc accept it.
@@ -71,7 +80,7 @@ Each of these fails silently, or only in production.
   alert, and it is what catches this repo being the thing that broke.
 - **The target's `concurrency` group is what makes a retried dispatch safe.** GitHub keeps
   one pending run per group. Without `cancel-in-progress: false` a target can stack runs.
-- **The instance id is the slot: `<scheduledTime>-<slugged cron>`.** In `src/index.ts`,
+- **The instance id is the firing: `<scheduledTime>-<slugged cron>`.** In `src/index.ts`,
   beside its only caller. `scheduled` uses
   `createBatch`, which skips an id still in its retention window, so a slot Cloudflare
   invokes twice dispatches once. `create` would throw. The cron belongs in the id because
@@ -99,9 +108,9 @@ Each of these fails silently, or only in production.
 
 ## Verifying a change
 
-`task check` is everything CI runs: typecheck, format, tests, dry-run deploy. After changing
-a cron, run `task crons` first -- `check` verifies the generated triggers, it does not write
-them.
+`task check` is everything CI runs: typecheck, format, tests, dry-run deploy. After a change
+that alters which expressions are in use, run `task crons` first -- `check` verifies the
+generated triggers, it does not write them.
 
 - Typecheck runs `wrangler types` first. `worker-configuration.d.ts` is gitignored and
   carries the runtime types and the bindings. Rerun after any binding change.
