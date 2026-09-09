@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { crons, selectTargets, TARGETS } from "../schedules"
+import { crons, SLOTS, selectTargets, TARGETS } from "../schedules"
 
 const dir = join(import.meta.dirname, "../schedules")
 
@@ -34,6 +34,26 @@ describe("wrangler.jsonc and schedules/ agree", () => {
   })
 })
 
+// One expression per slot is the whole free-plan budget, and each slot is its own trigger
+// so one Cloudflare misses is one slot's targets, not every daily.
+describe("SLOTS", () => {
+  it("holds at most the five expressions the free plan allows", () => {
+    expect(Object.keys(SLOTS).length).toBeLessThanOrEqual(5)
+  })
+
+  // Two slots on one expression would be one trigger firing both, which no name could tell
+  // apart -- and the Worker would dispatch both slots' targets on it.
+  it("gives every slot its own expression", () => {
+    const exprs = Object.values(SLOTS)
+    expect(new Set(exprs).size).toBe(exprs.length)
+  })
+
+  it("is where every configured cron comes from", () => {
+    const exprs = new Set<string>(Object.values(SLOTS))
+    expect(crons().filter((c) => !exprs.has(c))).toEqual([])
+  })
+})
+
 // index.ts imports each file by name -- Workers bundling is static, so there is no glob. A
 // file nobody imported never runs, and nothing else in the repo would notice.
 describe("the registry in schedules/index.ts", () => {
@@ -48,9 +68,9 @@ describe("the registry in schedules/index.ts", () => {
     expect(named.filter((n) => !files.has(n))).toEqual([])
   })
 
-  // One workflow on two expressions is legitimate -- a second slot for the same workload.
-  // Two identical entries are not: they would dispatch the same run twice in one firing.
-  it("registers no repo, workflow and cron triple twice", () => {
+  // One workflow in two slots is legitimate -- a second daily pass. The same slot named
+  // twice is not: it would dispatch the same run twice in one firing.
+  it("registers no repo, workflow and slot triple twice", () => {
     const keys = TARGETS.map((t) => `${t.repo}/${t.workflow}@${t.cron}`)
     expect(keys.length).toBe(new Set(keys).size)
   })

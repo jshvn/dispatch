@@ -11,8 +11,9 @@ vars:
   # The target list, read out of schedules/ itself so nothing here can drift from it.
   # Node imports the TypeScript directly (type stripping), so there is no build step.
   TARGETS: >-
-    node -e 'const {TARGETS} = await import("./schedules/index.ts");
-    for (const t of TARGETS) console.log([t.cron, t.repo, t.workflow].join("\t"))'
+    node -e 'const {SLOTS, TARGETS} = await import("./schedules/index.ts");
+    const slot = (c) => Object.keys(SLOTS).find((s) => SLOTS[s] === c);
+    for (const t of TARGETS) console.log([slot(t.cron), t.cron, t.repo, t.workflow].join("\t"))'
 
 tasks:
   # The menu. ponytail: hand-maintained listing -- go-task can neither group nor annotate,
@@ -30,7 +31,7 @@ tasks:
           "${c}what runs${r}" \
           "  task targets      What gets dispatched and when, read from schedules/" \
           "  task crons        Write wrangler.jsonc's triggers from schedules/" \
-          "                    ${d}run after adding or changing a cron; task check fails until you do${r}" \
+          "                    ${d}run after a slot's expression changes or a slot gains its first target${r}" \
           "  task runs         Recent runs of each target on GitHub" \
           "                    ${d}every run should say 'workflow_dispatch'; that is this Worker${r}" \
           "" \
@@ -117,7 +118,7 @@ tasks:
   # wrangler.jsonc is JSON: it cannot import schedules/, so the crons have to be copied into
   # it. This is the copy. test/schedules.test.ts is what fails until it has been run.
   crons:
-    desc: Write wrangler.jsonc's cron triggers from schedules/ - run after changing one
+    desc: Write wrangler.jsonc's cron triggers from schedules/ - run when the slots in use change
     silent: true
     cmds:
       - |
@@ -139,9 +140,9 @@ tasks:
     silent: true
     cmds:
       - |
-        printf '%-14s %-24s %s\n' CRON REPO WORKFLOW
-        {{.TARGETS}} | while IFS=$'\t' read -r cron repo workflow; do
-          printf '%-14s %-24s %s\n' "$cron" "$repo" "$workflow"
+        printf '%-10s %-14s %-24s %s\n' SLOT CRON REPO WORKFLOW
+        {{.TARGETS}} | while IFS=$'\t' read -r slot cron repo workflow; do
+          printf '%-10s %-14s %-24s %s\n' "$slot" "$cron" "$repo" "$workflow"
         done
 
   runs:
@@ -151,8 +152,8 @@ tasks:
       LIMIT: '{{.LIMIT | default 10}}'
     cmds:
       - |
-        {{.TARGETS}} | while IFS=$'\t' read -r cron repo workflow; do
-          printf '\n%s %s  (%s)\n' "$repo" "$workflow" "$cron"
+        {{.TARGETS}} | while IFS=$'\t' read -r slot cron repo workflow; do
+          printf '\n%s %s  (%s, %s)\n' "$repo" "$workflow" "$slot" "$cron"
           gh run list --repo "$repo" --workflow "$workflow" --limit {{.LIMIT}} \
             --json createdAt,event,conclusion \
             --jq '.[] | "  \(.createdAt[0:16] | sub("T"; " "))  \(.event)  \(.conclusion // "running")"'

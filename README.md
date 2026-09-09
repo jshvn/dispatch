@@ -49,27 +49,40 @@ Push to `main` deploys. The checks run on every push without either secret.
 
 ## Changing what runs
 
+Five slots, named in `schedules/index.ts`, each a cron trigger of its own:
+
+| slot        | UTC    | Pacific, winter |
+|-------------|--------|-----------------|
+| `hourly`    | :42    | :42             |
+| `overnight` | 11:17  | 03:17           |
+| `morning`   | 17:17  | 09:17           |
+| `afternoon` | 23:17  | 15:17           |
+| `evening`   | 05:17  | 21:17           |
+
 One file per GitHub repo in `schedules/`, named for the half of `owner/name` after the
-slash. It lists that repo's workflows and the cron each one runs on:
+slash. It lists that repo's workflows and the slots each one runs in, and ends in
+`as const` so a misspelt slot fails to compile:
 
 ```ts
 // schedules/ctan.ts
 export default {
   repo: "katoptra/ctan",
-  workflows: [{ workflow: "sync.yml", cron: "42 * * * *" }],
-}
+  workflows: [{ workflow: "sync.yml", slots: ["hourly"] }],
+} as const
 ```
 
 `schedules/index.ts` imports every one of them. Bundling is static, so there is no glob and
 a file the registry omits never runs.
 
-Cloudflare needs those same cron strings in `wrangler.jsonc`, which is JSON and cannot
-import them. `task crons` writes them there; `task check` fails until it has been run.
+Cloudflare needs the slots' cron strings in `wrangler.jsonc`, which is JSON and cannot
+import them. `task crons` writes the ones in use there; `task check` fails until it has
+been run. Registering a workflow in a slot that already has a target changes nothing in
+`wrangler.jsonc`.
 
 To add one:
 
 - Write `schedules/<name>.ts` and add its import to `schedules/index.ts`.
-- `task crons`.
+- `task crons`, if the slot had no target before.
 - Under `katoptra` the App already covers it. Under `jshvn`, add the repo to the App's
   installation there. A repo the App cannot see fails its step for good with
   `App is not installed on <owner>/<name>`, which `task inspect` shows.
@@ -84,7 +97,7 @@ To add one:
 To remove one:
 
 - Delete `schedules/<name>.ts` and its import from `schedules/index.ts`.
-- `task crons`.
+- `task crons`, if it was the slot's only target.
 - Give that workflow a `schedule:` of its own. `schedules/` was its only clock.
 - `task check`, then push to `main`.
 
@@ -118,6 +131,8 @@ It dispatches for real. Without the JSON the instance has no cron to look up and
 - Cloudflare parses the crons; this repo only looks up strings, so `0 * * * *` and
   `0 */1 * * *` are different keys.
 - The free plan allows 5 cron expressions per Cloudflare account, shared by every Worker on
-  it. Targets sharing an expression share a trigger, and a test holds the count at 5.
+  it. The five slots are that whole budget; only slots with a target become triggers, and
+  a test holds the count at 5.
 - A newly added cron takes up to 15 minutes to propagate, so its first slot may be missed.
-  Existing expressions keep firing across deploys.
+  Existing expressions keep firing across deploys. Adding a target to a slot already in use
+  adds no cron, so it is live on the next deploy.
