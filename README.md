@@ -41,11 +41,13 @@ Once, by hand.
 
 ### Repo secrets
 
-1. Settings -> Secrets and variables -> Actions.
-2. `CLOUDFLARE_API_TOKEN` -- the token above, shown once at creation.
-3. `CLOUDFLARE_ACCOUNT_ID` -- from the Workers & Pages overview.
+1. Put the token above and the account ID (Workers & Pages overview) in 1Password: vault
+   `jshvn`, item `dispatch`, section `cloudflare`, fields `token` and `account_id`.
+2. Settings -> Secrets and variables -> Actions: `OP_SERVICE_ACCOUNT_TOKEN`, the service
+   account that reads that vault. Every jshvn repository holds the same value, so rotating
+   it is one `gh secret set` per repository.
 
-Push to `main` deploys. The checks run on every push without either secret.
+Push to `main` deploys. The checks run on every push without the secret.
 
 ## Changing what runs
 
