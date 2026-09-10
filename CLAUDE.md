@@ -75,6 +75,12 @@ Each of these fails silently, or only in production.
   owner.** The step fails for good with `App is not installed on <owner>/<name>`. A repo
   created under `katoptra` is covered by that org's all-repositories install; one under
   `jshvn` has to be added to that installation by hand.
+- **A dispatch names a ref, and an unnamed one is `main`, not the repo's default branch.**
+  `dispatchWorkflow` sends `ref: target.ref ?? "main"`; GitHub requires the field, so there is
+  no asking it for the default. Every target is on `main`, which is what makes the default
+  right. A repo whose default is anything else answers 404, `isFatal` makes that
+  non-retryable, and the slot goes quiet with nothing on GitHub to see -- so such a repo sets
+  `ref`, or is renamed. Nothing here can check a ref against the real repo.
 - **This is the targets' only clock, and it never learns whether a run passed.** Their
   workflows carry no `schedule:`. Each workload pings its own healthcheck; that is the only
   alert, and it is what catches this repo being the thing that broke.

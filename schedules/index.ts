@@ -59,7 +59,11 @@ export type Workflow = {
   workflow: string
   /** where it runs; one is usual, a second is a second pass in the day. Never none. */
   slots: readonly [Slot, ...Slot[]]
-  /** git ref to run on; GitHub defaults to the default branch */
+  /**
+   * git ref to run on. Omitted means `main` -- the dispatch names a ref rather than
+   * asking GitHub for the repo's own default, so a repo whose default branch is
+   * anything else has to say so here or every dispatch 404s.
+   */
   ref?: string
   inputs?: Record<string, string>
 }
