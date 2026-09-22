@@ -1,0 +1,115 @@
+# katoptra-dispatch: starts the katoptra mirrors' workflows on UTC slots, from a systemd
+# timer on a jgrid.net host. Everything here is a local check or a read; nothing deploys.
+# The host picks up a change when jshvn/jgrid.net bumps this flake in its lock.
+#
+# Every Go command runs inside the toolbox image (Dockerfile), so the host supplies a
+# container engine and go-task and nothing else. The design is CLAUDE.md.
+version: '3'
+
+vars:
+  ENGINE:
+    sh: |
+      if [ -n "$ENGINE" ]; then echo "$ENGINE"
+      elif command -v container >/dev/null 2>&1 && container system status >/dev/null 2>&1; then echo container
+      elif command -v docker >/dev/null 2>&1; then echo docker
+      elif command -v container >/dev/null 2>&1; then echo container
+      else echo docker
+      fi
+  IMAGE: katoptra-dispatch-toolbox:local
+  # Apple container draws a progress spinner on a terminal; Docker's run has no such flag.
+  QUIET: '{{if eq .ENGINE "container"}}--progress none{{end}}'
+
+tasks:
+  # The menu. ponytail: hand-maintained listing -- go-task can neither group nor annotate,
+  # so a new task means a line below. `task --list` stays the generated view.
+  default:
+    desc: Print the menu
+    silent: true
+    cmds:
+      - |
+        b=$(printf '\033[1m'); c=$(printf '\033[1;36m'); d=$(printf '\033[2m'); r=$(printf '\033[0m')
+        printf '%s\n' \
+          "" \
+          "${b}katoptra-dispatch${r}   ${d}starts the katoptra mirrors' workflows on UTC slots, from a systemd timer${r}" \
+          "" \
+          "${c}read -- looks, changes nothing${r}" \
+          "  task targets      Every job and its UTC slot times, read from schedules/" \
+          "  task runs         Recent runs of each target on GitHub ${d}(LIMIT=10)${r}" \
+          "                    ${d}needs gh logged in; every run should say workflow_dispatch${r}" \
+          "" \
+          "${c}checks -- offline, no credentials, inside the toolbox image${r}" \
+          "  task check        Everything CI runs: gofmt, go vet, go test" \
+          "  task fmt          gofmt -w in place" \
+          "  ${d}nix flake check is the host-side proof; it needs nix, see CLAUDE.md${r}" \
+          "" \
+          "${c}toolbox${r}" \
+          "  task run -- <cmd> Run any command in the image with the repo mounted" \
+          "  task image        Build the image ${d}(skipped when it exists)${r}" \
+          "  task clean        Remove the image and the Go build cache ${d}(after a Dockerfile edit)${r}" \
+          ""
+
+  run:
+    desc: 'Run any command in the toolbox image, e.g. task run -- go test ./...'
+    deps: [image]
+    silent: true
+    cmds:
+      - >-
+        {{.ENGINE}} run {{.QUIET}} --rm -i $(test -t 0 && test -t 1 && echo -t || true)
+        --user $(id -u):$(id -g)
+        -v "{{.ROOT_DIR}}":/work -w /work
+        -e HOME=/tmp -e GOCACHE=/work/.cache/go-build
+        {{.IMAGE}} {{.CLI_ARGS}}
+
+  image:
+    desc: Build the toolbox image
+    run: once
+    silent: true
+    # Presence is the freshness check, so a Dockerfile edit does not rebuild on its own:
+    # task clean, then any task.
+    status:
+      - '{{.ENGINE}} image inspect {{.IMAGE}} >/dev/null 2>&1'
+    cmds:
+      - '{{.ENGINE}} build -t {{.IMAGE}} .'
+
+  check:
+    desc: Everything CI runs - gofmt, go vet, go test
+    cmds:
+      - task: run
+        vars:
+          CLI_ARGS: >-
+            sh -c 'bad=$(gofmt -l .); if [ -n "$bad" ]; then echo "gofmt needed: $bad" >&2; exit 1; fi;
+            go vet ./... && go test ./...'
+
+  fmt:
+    desc: gofmt -w in place
+    cmds:
+      - task: run
+        vars: {CLI_ARGS: gofmt -w .}
+
+  targets:
+    desc: Every job and its UTC slot times, read from schedules/
+    silent: true
+    cmds:
+      - task: run
+        vars: {CLI_ARGS: go run . --list}
+
+  runs:
+    desc: Recent runs of each target on GitHub - workflow_dispatch ones came from here
+    silent: true
+    vars:
+      LIMIT: '{{.LIMIT | default 10}}'
+    cmds:
+      # GH_PAGER=cat: on a terminal gh opens its pager for each target and waits on it.
+      - |
+        task run -- go run . --list | awk 'NR > 1 { print $1 }' | while read -r id; do
+          printf '\n%s\n' "$id"
+          GH_PAGER=cat gh run list --repo "${id%/*}" --workflow "${id##*/}" --limit {{.LIMIT}} \
+            --json createdAt,event,conclusion \
+            --jq '.[] | "  \(.createdAt[0:16] | sub("T"; " "))  \(.event)  \(.conclusion // "running")"' </dev/null
+        done
+
+  clean:
+    desc: Remove the toolbox image and the Go build cache - the next task rebuilds both
+    cmds:
+      - '{{.ENGINE}} image rm {{.IMAGE}} >/dev/null 2>&1 || true'
+      - rm -rf .cache
