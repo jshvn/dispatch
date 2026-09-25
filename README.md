@@ -1,160 +1,107 @@
 <h1 align="center">dispatch</h1>
 
-<p align="center">The scheduler that starts the workflows in my own repositories.</p>
+<p align="center">Runs the workflows in my own repos on a schedule.</p>
 
 <p align="center">
   <a href="https://github.com/jshvn/dispatch/actions/workflows/check.yml"><img src="https://github.com/jshvn/dispatch/actions/workflows/check.yml/badge.svg" alt="check"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/jshvn/dispatch" alt="license"></a>
+  <a href="https://github.com/jshvn/dispatch#how-it-works"><img src="https://healthchecks.io/b/2/d2219b5b-5ca5-49e0-bc3c-428a226e3220.svg" alt="tick"></a>
 </p>
 
-No workflow here schedules itself; each waits for a `workflow_dispatch`, and this
-repository sends it. A systemd timer on a NixOS host ticks every five minutes, fires each
-job whose latest slot has not been fired yet, then pings one healthcheck. A host that was
-down fires each missed job once, for the latest of its slots, when it comes back. No slot
-fires twice. It is one Go binary with no dependency outside the standard library, and it
-runs on a one-core VPS.
+My scheduled GitHub Actions workflows have no schedule of their own. This repo starts
+them.
 
-It is a copy of [katoptra/dispatch](https://github.com/katoptra/dispatch), which does the
-same for the katoptra mirrors, pointed at the `jshvn` account and with per-job jitter.
+- A systemd timer on a NixOS host runs it every five minutes.
+- Each run starts any workflow that is due, then pings a healthcheck.
+- If the host goes down, each job that missed a run fires once when it comes back.
+- A job never fires twice for the same time slot.
+- It is one Go binary with no dependencies outside the standard library.
 
-## How to use
+It is a copy of [katoptra/dispatch](https://github.com/katoptra/dispatch), which runs the
+katoptra mirrors. This one works with a GitHub user account and can add jitter to a job.
 
-A job is one workflow in one jshvn repository and the UTC hours it runs at. Every slot
-fires at `HH:42`:
+## Adding a job
 
-| Slot | UTC | Pacific, winter |
-|---|---|---|
-| `Hourly` | :42 | :42 |
-| `Evening` | 05:42 | 21:42 |
-| `Overnight` | 11:42 | 03:42 |
-| `Morning` | 17:42 | 09:42 |
-| `Afternoon` | 23:42 | 15:42 |
-
-`S0` through `S23` name every hour; the four daily names are aliases for `S5`, `S11`,
-`S17` and `S23`. Each repository gets one file in [`schedules/`](schedules), named for
-the half of `owner/name` after the slash:
+Each repo gets one file in [`schedules/`](schedules), named after the repo:
 
 ```go
 // schedules/terraform.go
 var _ = register(Job{Repo: "jshvn/terraform", File: "drift.yml", Slots: Evening})
 ```
 
-Two slots are `Morning | Evening`. A misspelt slot fails to compile.
+Every slot runs at 42 minutes past the hour, UTC:
 
-A job with `Jitter: 30 * time.Minute` fires each slot up to half an hour late, a different
-wait every slot, so its runs do not land on a clock. The wait is drawn from the job and the
-slot, so every tick agrees on it, and it rounds up to the next five-minute tick.
+| Slot | UTC | Pacific (winter) |
+|---|---|---|
+| `Hourly` | every hour at :42 | every hour at :42 |
+| `Evening` | 05:42 | 21:42 |
+| `Overnight` | 11:42 | 03:42 |
+| `Morning` | 17:42 | 09:42 |
+| `Afternoon` | 23:42 | 15:42 |
 
-The workflow must hold up three things this repository cannot check. A workflow that
-fails any of them is dispatched into silence:
+- `S0` to `S23` name each hour. The four daily names are shortcuts for `S5`, `S11`, `S17`
+  and `S23`.
+- Combine slots with `|`, like `Morning | Evening`.
+- A misspelled slot won't compile.
+- Add `Jitter: 30 * time.Minute` to start each run up to 30 minutes late, at a different
+  time for every slot. The delay rounds up to the next five-minute tick.
 
-1. It declares `workflow_dispatch:` in `on:`.
-2. It declares a `concurrency` group with `cancel-in-progress: false`, so a dispatch that
-   arrives during a run queues instead of doubling up.
-3. It pings its own healthcheck, or its file in `schedules/` says what alerts instead.
-   The scheduler never learns whether a run passed.
+The workflow needs three things that this repo can't check for you:
 
-The App must be installed on the repository too; a repository it cannot see answers the
-dispatch with 404. A change reaches the host when the host's flake lock moves to the new
-commit. A new job fires at the next tick, for its latest slot.
+- `workflow_dispatch:` under `on:`.
+- A `concurrency` group with `cancel-in-progress: false`, so a second start waits for the
+  first run to finish.
+- Its own healthcheck ping, or a comment in its `schedules/` file saying what alerts
+  instead. The scheduler starts runs but never sees whether they pass.
+
+The GitHub App also has to be installed on the repo. A change goes live when the host's
+flake lock moves to the new commit. A new job fires on the next tick.
 
 ## How it works
 
-Every five minutes, at `:02`, `:07` and on through `:57`, the timer starts one oneshot
-tick:
-
 ```mermaid
 flowchart LR
-  timer["systemd timer<br/>*:02/5 UTC"] --> lock --> load["load state.json"] --> plan
-  plan --> prepare["prepare<br/>mint the App's token"] --> record["record every due slot"] --> dispatch["dispatch<br/>POST workflow_dispatch, ref main"] --> ping["ping the healthcheck"]
+  timer["timer, every 5 min"] --> load["load state.json"] --> plan["find due jobs"]
+  plan --> token["get App token"] --> save["save state"] --> start["start workflows"] --> ping["ping healthcheck"]
   plan -. "nothing due" .-> ping
-  prepare -. "GitHub is down: nothing recorded" .-> ping
+  token -. "GitHub down, nothing saved" .-> ping
 ```
 
-- **Catch-up is `plan`, not systemd.** Each tick compares every job's latest slot with the
-  one `state.json` last recorded for it. Any number of missed slots come out as one due
-  slot, so a host down for a day fires each job once when it returns.
-- **At most once, by writing ahead.** Every due slot is recorded before the first POST.
-  A crash or a failed dispatch loses that slot; nothing retries it, and the job's next
-  slot is the retry. The token is minted before the write, since minting starts no run,
-  so a GitHub outage at that step records nothing and the next tick tries again.
-- **Retries are only where a repeat is harmless.** 10 s, 20 s, 40 s. The token requests
-  retry any 5xx, 408, 429 or network error. A dispatch retries only 408, 429 and a
-  connection that never opened: a 5xx or a timeout can follow a dispatch GitHub already
-  accepted, and a retry would be a second run. GitHub gets two minutes a tick, retries
-  included, and the rest of the unit's four is the ping's, so a failing tick still
-  reaches `/fail`.
-- **One healthcheck for the scheduler.** A clean tick pings the URL; a tick with any
-  error pings `/fail` with the error text; a dead host pings nothing.
+The timer fires at :02, :07 and every five minutes after that. Each tick:
 
-The files, the constraints and the reasoning behind each choice are in
-[`CLAUDE.md`](CLAUDE.md).
+1. Loads `state.json`, which holds the last slot each job fired for.
+2. Works out which jobs are due. A job that missed several slots is due once, for the
+   latest one.
+3. Gets a token for the GitHub App.
+4. Saves the new state.
+5. Starts each due workflow on `main`.
+6. Pings the healthcheck: the plain URL if everything worked, or `/fail` with the errors.
 
-## Want your own?
+The state is saved before any workflow starts. If a tick crashes after that, the run for
+that slot is lost and the job runs again at its next slot. No run ever starts twice. If
+GitHub is down when the token is requested, nothing is saved and the next tick tries again.
 
-### 1. Fork it
+Retries wait 10, 20 and then 40 seconds:
 
-Fork this repository and replace the files in [`schedules/`](schedules) with your own
-jobs. The package's test refuses a job outside a `jshvn/` repository; change that prefix,
-and `Owner` in `main.go`, to your account's. The installation is looked up on a user
-account; for an organization, fork [katoptra/dispatch](https://github.com/katoptra/dispatch),
-which looks it up on an org.
+- Token requests retry on any 5xx, 408, 429 or network error.
+- Workflow starts retry only on 408, 429 or a connection that never opened. GitHub can
+  return a 5xx after it has already started the run, so a retry could start it twice.
+- GitHub gets two minutes per tick, which leaves time to ping the healthcheck.
 
-### 2. The GitHub App
+The design and the reasons behind it are in [`CLAUDE.md`](CLAUDE.md).
 
-1. Create an App owned by your account: Repository permissions, Actions, Read and write,
-   and nothing else; no webhook.
-2. Install it on the account with access to the repositories it runs.
-3. Note the App ID and generate a private key. The key is used as GitHub issues it; no
-   conversion.
+## Running it
 
-### 3. The healthcheck
-
-One healthchecks.io check with a period of 5 minutes and a grace of 10.
-
-### 4. The host
-
-Add this flake as an input and give the module three files. How the host renders them is
-its own business; they are read through `LoadCredential=`, so root-owned 0400 files work.
-
-```nix
-{
-  imports = [ inputs.jshvn-dispatch.nixosModules.default ];
-  services.jshvn-dispatch = {
-    enable = true;
-    appIdFile = "/run/secrets/jshvn-dispatch-app-id";
-    privateKeyFile = "/run/secrets/jshvn-dispatch-private-key";
-    healthcheckUrlFile = "/run/secrets/jshvn-dispatch-healthcheck-url";
-  };
-}
-```
-
-The paths are strings: a Nix path literal would copy the secret into the store.
-
-### 5. Prove it, run it
-
-On a laptop with go-task and Docker or Apple `container`:
+`task` on its own prints the menu. From a laptop:
 
 ```sh
-task check    # gofmt, go vet, go test, inside the toolbox image; what CI runs
-task targets  # every job and its UTC slot times, read from schedules/
+task check          # gofmt, go vet and go test in the toolbox image, same as CI
+task targets        # every job and when it runs
+task runs           # recent runs of each job on GitHub (needs gh logged in)
+task runs LIMIT=10  # more of them
 ```
 
-`nix flake check` builds the package and renders the two units; [`CLAUDE.md`](CLAUDE.md)
-has the command for a laptop without nix. Only a real tick proves the App: on the host,
-`sudo systemctl start jshvn-dispatch` and read the journal.
-
-## Operating it
-
-`task` alone prints the menu. From a laptop:
-
-```sh
-task targets           # what runs and when
-task runs              # each target's recent runs on GitHub; needs gh logged in
-task runs LIMIT=10     # more of them
-```
-
-Every run a target shows as `workflow_dispatch` came from here. On the host:
+Runs started by this repo show up as `workflow_dispatch`. On the host:
 
 ```sh
 systemctl list-timers jshvn-dispatch.timer
@@ -164,23 +111,53 @@ sudo cat /var/lib/private/jshvn-dispatch/state.json
 sudo STATE_DIRECTORY=/var/lib/private/jshvn-dispatch jshvn-dispatch --dry-run
 ```
 
-`--dry-run` prints what is due and why, and writes, dispatches and pings nothing.
+`--dry-run` shows what is due and why, without saving, starting or pinging anything.
 
-- **The healthcheck goes quiet.** The host or its timer is down. Nothing is lost: when it
-  comes back, the next tick fires every job that missed a slot, once.
-- **A tick pings `/fail`.** The error text is in the ping's body and in
-  `journalctl -u jshvn-dispatch -p err`. The slot it failed on is gone; the job's next
-  slot is the retry.
-- **A dispatch answers 404.** Every dispatch is to `ref: main`, so the repository's
-  default branch is not `main`, the workflow file is not there, or the App is not
-  installed on the repository.
-- **Every tick fails on `state.json`.** A corrupt state file stops everything, since
-  empty state would fire every job again. Repair it by hand, or delete it: every job then
-  fires once.
+### When something goes wrong
 
-## Reference
+- **The healthcheck goes quiet.** The host or its timer is down. When it comes back, each
+  job that missed a slot fires once.
+- **The healthcheck gets a `/fail` ping.** The error is in the ping body and in
+  `journalctl -u jshvn-dispatch -p err`. That slot is skipped, and the job runs again at
+  its next slot.
+- **A workflow start returns 404.** The repo's default branch isn't `main`, the workflow
+  file isn't there, or the App isn't installed on the repo.
+- **Every tick fails on `state.json`.** The file is corrupt, and nothing runs until it is
+  fixed. Repair it by hand or delete it. Deleting it makes every job fire once.
 
-[`CLAUDE.md`](CLAUDE.md) is the design: the files, the constraints, and what breaks if a
-choice is undone.
+## Run your own
 
-MIT licensed. Built by [Josh Vaughen](https://ijosh.com).
+1. **Fork this repo** and replace the files in `schedules/` with your own jobs. The tests
+   only accept `jshvn/` repos, so change that prefix to your account's, and change `Owner`
+   in `main.go` to match. This version looks up the App on a user account. For an
+   organization, fork [katoptra/dispatch](https://github.com/katoptra/dispatch) instead.
+2. **Create a GitHub App** owned by your account, with one permission: Actions, read and
+   write. It needs no webhook. Install it on the repos it should run. Note the App ID and
+   generate a private key. The key works as GitHub issues it.
+3. **Create a healthchecks.io check** with a 5 minute period and a 10 minute grace.
+4. **Add the flake to your NixOS host** and give the module three files:
+
+   ```nix
+   {
+     imports = [ inputs.jshvn-dispatch.nixosModules.default ];
+     services.jshvn-dispatch = {
+       enable = true;
+       appIdFile = "/run/secrets/jshvn-dispatch-app-id";
+       privateKeyFile = "/run/secrets/jshvn-dispatch-private-key";
+       healthcheckUrlFile = "/run/secrets/jshvn-dispatch-healthcheck-url";
+     };
+   }
+   ```
+
+   Keep the paths as strings. A Nix path would copy the secrets into the Nix store, where
+   anyone on the host can read them. The files are loaded with `LoadCredential=`, so
+   root-owned files with mode 0400 work.
+5. **Check it.** On a laptop with go-task and Docker or Apple `container`, run `task check`
+   and `task targets`. `nix flake check` builds the package and the systemd units;
+   [`CLAUDE.md`](CLAUDE.md) shows how to run it without nix installed. The only real test
+   of the App is a live tick: run `sudo systemctl start jshvn-dispatch` on the host and
+   read the journal.
+
+## License
+
+MIT. Built by [Josh Vaughen](https://ijosh.com).
