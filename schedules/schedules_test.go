@@ -40,6 +40,32 @@ func TestLatest(t *testing.T) {
 	}
 }
 
+// Minute by minute across three days: Due never hands back a slot whose wait is still to
+// come, never moves backwards, and takes the latest slot as soon as its wait has passed.
+func TestDueWaitsOutTheJitter(t *testing.T) {
+	j := Job{Repo: "jshvn/x", File: "w.yml", Slots: S0 | S12, Jitter: 30 * time.Minute}
+	var prev time.Time
+	waits := map[time.Duration]bool{}
+	for now := at("2026-09-21T00:00:00Z"); now.Before(at("2026-09-24T00:00:00Z")); now = now.Add(time.Minute) {
+		due, ok := j.Due(now)
+		w := j.Wait(due)
+		if !ok || w >= j.Jitter || due.Add(w).After(now) || due.Before(prev) {
+			t.Fatalf("Due(%s) = %s, wait %s; want a slot whose wait has passed, not before %s", now, due, w, prev)
+		}
+		if latest, _ := j.Slots.Latest(now); !latest.Add(j.Wait(latest)).After(now) && !due.Equal(latest) {
+			t.Fatalf("Due(%s) = %s; the latest slot %s has waited out its jitter", now, due, latest)
+		}
+		prev, waits[w] = due, true
+	}
+	if len(waits) < 2 {
+		t.Errorf("waits %v; want them to differ from slot to slot", waits)
+	}
+	still := Job{Slots: Morning}
+	if due, _ := still.Due(at("2026-09-21T17:42:00Z")); !due.Equal(at("2026-09-21T17:42:00Z")) {
+		t.Errorf("no jitter: Due = %s; want the slot on its minute", due)
+	}
+}
+
 func TestNamedSlots(t *testing.T) {
 	for name, pair := range map[string][2]Slot{
 		"evening": {Evening, S5}, "overnight": {Overnight, S11},
@@ -65,8 +91,11 @@ func TestNamedSlots(t *testing.T) {
 func TestJobs(t *testing.T) {
 	seen := map[string]bool{}
 	for _, j := range Jobs() {
-		if !strings.HasPrefix(j.Repo, "katoptra/") || strings.Count(j.Repo, "/") != 1 {
-			t.Errorf("%s: not a katoptra repository", j.ID())
+		if !strings.HasPrefix(j.Repo, "jshvn/") || strings.Count(j.Repo, "/") != 1 {
+			t.Errorf("%s: not a jshvn repository", j.ID())
+		}
+		if j.Jitter < 0 || j.Jitter >= time.Hour {
+			t.Errorf("%s: jitter %s outside [0, 1h)", j.ID(), j.Jitter)
 		}
 		if j.Slots == 0 || j.Slots > Hourly {
 			t.Errorf("%s: slots %b outside S0..S23 or empty", j.ID(), j.Slots)

@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/katoptra/dispatch/schedules"
+	"github.com/jshvn/dispatch/schedules"
 )
 
 // stateFile holds, per job id, the last slot that job was fired for.
@@ -81,11 +81,12 @@ type Fire struct {
 	Slot time.Time
 }
 
-// Plan returns the jobs due at now: those with no recorded slot, or whose latest slot is
-// after the one recorded. However many slots a job missed, it is due once, for the latest.
+// Plan returns the jobs due at now: those with no recorded slot, or whose latest slot, its
+// jitter passed, is after the one recorded. However many slots a job missed, it is due
+// once, for the latest.
 func Plan(jobs []schedules.Job, s State, now time.Time) (fires []Fire, warnings []string) {
 	for _, j := range jobs {
-		due, ok := j.Slots.Latest(now)
+		due, ok := j.Due(now)
 		if !ok {
 			continue
 		}

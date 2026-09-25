@@ -1,15 +1,16 @@
 # dispatch
 
-Starts the katoptra mirrors' workflows on UTC slots, from a systemd timer on a NixOS host.
+Starts the workflows in my own repositories on UTC slots, from a systemd timer on a NixOS
+host. A copy of katoptra/dispatch, which does the same for the katoptra mirrors.
 `README.md` is for users; this file is the design.
 
 ## The files
 
 - `schedules/` -- `Slot` (a bitmask of UTC hours, each at `HH:42`), the named aliases,
-  `Latest`, `Job`, and one file per katoptra repo registering its jobs. Routine changes
-  touch only this directory.
+  `Latest`, `Job` and its jitter, and one file per jshvn repo registering its jobs. Routine
+  changes touch only this directory.
 - `tick.go` -- the state file, `Plan`, and `Tick`: lock, load, plan, write ahead, dispatch.
-- `github.go` -- App JWT, the org's installation, installation token, `workflow_dispatch`,
+- `github.go` -- App JWT, the account's installation, installation token, `workflow_dispatch`,
   retries. No SDK.
 - `main.go` -- flags, credentials from `$CREDENTIALS_DIRECTORY`, the healthcheck ping, the
   exit code.
@@ -18,9 +19,10 @@ Starts the katoptra mirrors' workflows on UTC slots, from a systemd timer on a N
 
 ## Constraints
 
-- It dispatches. It does not run work or watch outcomes; each mirror pings its own
-  healthcheck.
-- katoptra repositories only; the App is installed on the `katoptra` org alone.
+- It dispatches. It does not run work or watch outcomes; each workload pings its own
+  healthcheck or says in its `schedules/` file what alerts instead.
+- jshvn repositories only. The App is installed on the `jshvn` user account, and the
+  installation is looked up with `/users/jshvn/installation`; an org would need `/orgs/`.
 - Standard library only (`vendorHash = null`). Go 1.26, matching nixos-26.05's
   `buildGoModule`; the toolbox image pins the same.
 - UTC throughout. No DST handling anywhere.
@@ -35,7 +37,7 @@ Starts the katoptra mirrors' workflows on UTC slots, from a systemd timer on a N
 - **The token comes before the write.** `Dispatcher.Prepare` mints the installation token
   before anything is recorded, since minting starts no run. A GitHub or network outage there
   leaves the slots unrecorded and the next tick tries again, instead of losing a daily
-  mirror's day. `TestPrepareFailureRecordsNothing` holds it.
+  job's day. `TestPrepareFailureRecordsNothing` holds it.
 - **Catch-up is `Plan`, not systemd.** The timer has no `Persistent=`. Every tick compares
   each job's latest slot with its recorded one, so any number of missed slots fire once.
   A timer per slot with `Persistent=true` would fire each missed slot instead.
@@ -43,6 +45,11 @@ Starts the katoptra mirrors' workflows on UTC slots, from a systemd timer on a N
   fires every job for slots already sent. Repair or delete it by hand; deleting fires each
   job once.
 - **A new job fires at the next tick**, for its latest slot, because it has no entry.
+- **Jitter moves the fire, not the slot.** `Job.Due` is the latest slot whose `Wait` has
+  passed, and `state.json` records that slot. `Wait` hashes the job and the slot rather
+  than drawing at random, so every tick agrees on it and a crashed tick's successor does not
+  pick a new one. It stays under an hour (`TestJobs`): a wait past the next slot would skip
+  a slot. `TestDueWaitsOutTheJitter` holds it.
 - **The timer is `*:02/5 UTC`.** It starts at :02 so `:42` is a tick; `UTC` because the
   jgrid.net hosts run in `America/Los_Angeles`. Changing `schedules.Minute` means changing
   the timer too.
@@ -56,7 +63,7 @@ Starts the katoptra mirrors' workflows on UTC slots, from a systemd timer on a N
   pass the deadline is not made. The rest of `TimeoutStartSec=4min` is the ping's, so a
   failing tick still reaches `/fail`.
 - **The binary is renamed in `postInstall`.** `buildGoModule` names it after the module
-  path's last element, `dispatch`; the unit runs `katoptra-dispatch`. The `module` check
+  path's last element, `dispatch`; the unit runs `jshvn-dispatch`. The `module` check
   fails if `ExecStart` is not an executable.
 - **Journal priorities** (`<3>`, `<4>`) are written only when `JOURNAL_STREAM` is set, so
   a hand run prints plain lines.
@@ -73,4 +80,4 @@ units from a minimal system. Without nix on the laptop:
        NIX_CONFIG="experimental-features = nix-command flakes" nix flake check'
 
 Files must be `git add`ed for the flake to see them. Only a real tick proves the GitHub App
-contract: on the host, `sudo systemctl start katoptra-dispatch` and read the journal.
+contract: on the host, `sudo systemctl start jshvn-dispatch` and read the journal.

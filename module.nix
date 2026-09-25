@@ -9,7 +9,7 @@ self:
   ...
 }:
 let
-  cfg = config.services.katoptra-dispatch;
+  cfg = config.services.jshvn-dispatch;
   package = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
   # A string, never a Nix path: a path literal would copy the secret into the world-readable store.
   secretPath =
@@ -20,16 +20,16 @@ let
     };
 in
 {
-  options.services.katoptra-dispatch = {
-    enable = lib.mkEnableOption "the katoptra workflow scheduler";
-    appIdFile = secretPath "File holding the katoptra GitHub App's id.";
+  options.services.jshvn-dispatch = {
+    enable = lib.mkEnableOption "the jshvn workflow scheduler";
+    appIdFile = secretPath "File holding the jshvn GitHub App's id.";
     privateKeyFile = secretPath "File holding the App's private key, PKCS#1 or PKCS#8 PEM.";
     healthcheckUrlFile = secretPath "File holding the scheduler's healthchecks.io ping URL.";
   };
 
   config = lib.mkIf cfg.enable {
-    systemd.timers.katoptra-dispatch = {
-      description = "katoptra-dispatch tick, every five minutes";
+    systemd.timers.jshvn-dispatch = {
+      description = "jshvn-dispatch tick, every five minutes";
       wantedBy = [ "timers.target" ];
       # :02, :07 .. :42 .. :57, so the slot minute is always a tick. UTC whatever the host's
       # zone. No Persistent=: every tick reconciles from the state file, so a missed tick is
@@ -37,16 +37,16 @@ in
       timerConfig.OnCalendar = "*:02/5 UTC";
     };
 
-    systemd.services.katoptra-dispatch = {
-      description = "fire due katoptra workflows, then ping the scheduler's healthcheck";
+    systemd.services.jshvn-dispatch = {
+      description = "fire due jshvn workflows, then ping the scheduler's healthcheck";
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${package}/bin/katoptra-dispatch";
+        ExecStart = "${package}/bin/jshvn-dispatch";
         TimeoutStartSec = "4min";
         DynamicUser = true;
-        StateDirectory = "katoptra-dispatch";
+        StateDirectory = "jshvn-dispatch";
         LoadCredential = [
           "app-id:${cfg.appIdFile}"
           "private-key:${cfg.privateKeyFile}"

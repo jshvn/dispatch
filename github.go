@@ -1,6 +1,6 @@
 package main
 
-// The GitHub App's side: sign a JWT, find the App's installation on the org, mint an
+// The GitHub App's side: sign a JWT, find the App's installation on the account, mint an
 // installation token, dispatch a workflow. No SDK, three requests.
 
 import (
@@ -93,7 +93,7 @@ func AppJWT(appID string, key *rsa.PrivateKey, now time.Time) (string, error) {
 type GitHub struct {
 	API   string // https://api.github.com
 	AppID string
-	Org   string // the one installation this App has
+	Owner string // the user account holding the one installation this App has
 	Key   *rsa.PrivateKey
 	HTTP  *http.Client
 	Sleep func(time.Duration)
@@ -129,13 +129,13 @@ func (g *GitHub) mint(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	b, err := g.call(ctx, "GET", "/orgs/"+g.Org+"/installation", jwt, nil, true)
+	b, err := g.call(ctx, "GET", "/users/"+g.Owner+"/installation", jwt, nil, true)
 	if err != nil {
 		return "", err
 	}
 	var inst struct{ ID int64 }
 	if err := json.Unmarshal(b, &inst); err != nil || inst.ID == 0 {
-		return "", fmt.Errorf("installation for %s: no id in %.200s", g.Org, b)
+		return "", fmt.Errorf("installation for %s: no id in %.200s", g.Owner, b)
 	}
 	b, err = g.call(ctx, "POST", fmt.Sprintf("/app/installations/%d/access_tokens", inst.ID), jwt, nil, true)
 	if err != nil {
@@ -171,7 +171,7 @@ func (g *GitHub) once(ctx context.Context, method, path, auth string, body []byt
 	req.Header.Set("Authorization", "Bearer "+auth)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "katoptra-dispatch")
+	req.Header.Set("User-Agent", "jshvn-dispatch")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

@@ -1,4 +1,4 @@
-# katoptra-dispatch: starts the katoptra mirrors' workflows on UTC slots, from a systemd
+# jshvn-dispatch: starts my own repos' workflows on UTC slots, from a systemd
 # timer on a jgrid.net host. Everything here is a local check or a read; nothing deploys.
 # The host picks up a change when jshvn/jgrid.net bumps this flake in its lock.
 #
@@ -15,7 +15,7 @@ vars:
       elif command -v container >/dev/null 2>&1; then echo container
       else echo docker
       fi
-  IMAGE: katoptra-dispatch-toolbox:local
+  IMAGE: jshvn-dispatch-toolbox:local
   # Apple container draws a progress spinner on a terminal; Docker's run has no such flag.
   QUIET: '{{if eq .ENGINE "container"}}--progress none{{end}}'
 
@@ -30,7 +30,7 @@ tasks:
         b=$(printf '\033[1m'); c=$(printf '\033[1;36m'); d=$(printf '\033[2m'); r=$(printf '\033[0m')
         printf '%s\n' \
           "" \
-          "${b}katoptra-dispatch${r}   ${d}starts the katoptra mirrors' workflows on UTC slots, from a systemd timer${r}" \
+          "${b}jshvn-dispatch${r}   ${d}starts my own repos' workflows on UTC slots, from a systemd timer${r}" \
           "" \
           "${c}read -- looks, changes nothing${r}" \
           "  task targets      Every job and its UTC slot times, read from schedules/" \
