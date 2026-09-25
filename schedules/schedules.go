@@ -1,4 +1,4 @@
-// Package schedules is what the scheduler starts, and when. One file per katoptra repo,
+// Package schedules is what the scheduler starts, and when. One file per jshvn repo,
 // named for the half of "owner/name" after the slash, each adding its jobs to the list
 // below. Changing what runs touches only this directory.
 //
@@ -8,11 +8,13 @@
 //  1. It declares `workflow_dispatch:` in `on:`.
 //  2. It declares a `concurrency` group with `cancel-in-progress: false`, so a dispatch
 //     arriving during a run queues instead of doubling up.
-//  3. The workload pings its own healthcheck. This repo never learns whether a run passed.
+//  3. The workload pings its own healthcheck, or its file here says what alerts instead.
+//     This repo never learns whether a run passed.
 package schedules
 
 import (
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 )
@@ -120,13 +122,39 @@ func (s Slot) String() string {
 
 // Job is one workflow in one repo, dispatched on `main` in every slot it holds.
 type Job struct {
-	Repo  string // "katoptra/<name>"
-	File  string // workflow file name, e.g. "sync.yml"
+	Repo  string // "jshvn/<name>"
+	File  string // workflow file name, e.g. "watch.yml"
 	Slots Slot
+	// Jitter delays each slot by a wait in [0, Jitter), a different one every slot, so the
+	// runs do not read as a clock. Under an hour; zero fires on the slot.
+	Jitter time.Duration
 }
 
-// ID is the job's key in the state file: "katoptra/ctan/sync.yml".
+// ID is the job's key in the state file: "jshvn/apartments/watch.yml".
 func (j Job) ID() string { return j.Repo + "/" + j.File }
+
+// Due is the job's latest slot whose wait has passed at now; the state file records the
+// slot, not the wait. False when Slots holds no hour.
+func (j Job) Due(now time.Time) (time.Time, bool) {
+	t, ok := j.Slots.Latest(now)
+	for ok && t.Add(j.Wait(t)).After(now) {
+		t, ok = j.Slots.Latest(t.Add(-time.Minute))
+	}
+	return t, ok
+}
+
+// Wait is how long past slot the job fires, whole minutes under Jitter. A hash of the job and
+// the slot rather than a random draw, so every tick, a dry run included, agrees on it.
+// ponytail: the timer ticks every five minutes, so the real wait rounds up to the next tick.
+func (j Job) Wait(slot time.Time) time.Duration {
+	n := uint64(j.Jitter / time.Minute)
+	if n == 0 {
+		return 0
+	}
+	h := fnv.New64a()
+	fmt.Fprintf(h, "%s@%d", j.ID(), slot.Unix())
+	return time.Duration(h.Sum64()%n) * time.Minute
+}
 
 var jobs []Job
 

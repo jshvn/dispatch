@@ -1,3 +1,3 @@
-module github.com/katoptra/dispatch
+module github.com/jshvn/dispatch
 
 go 1.26

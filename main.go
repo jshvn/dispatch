@@ -1,4 +1,4 @@
-// katoptra-dispatch is one tick of the katoptra scheduler: fire every job whose latest slot
+// jshvn-dispatch is one tick of the jshvn scheduler: fire every job whose latest slot
 // has not been fired yet, record it first, then ping the scheduler's healthcheck. A systemd
 // timer runs it every five minutes; see module.nix.
 package main
@@ -17,7 +17,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/katoptra/dispatch/schedules"
+	"github.com/jshvn/dispatch/schedules"
 )
 
 // pingLimit caps the error text sent with a /fail ping. healthchecks.io keeps 100 kB.
@@ -47,6 +47,9 @@ func printJobs(w io.Writer) {
 		times := strings.Join(j.Slots.Times(), ", ")
 		if j.Slots == schedules.Hourly {
 			times = fmt.Sprintf("every hour at :%02d", schedules.Minute)
+		}
+		if j.Jitter > 0 {
+			times += fmt.Sprintf(", each up to %dm late", int(j.Jitter/time.Minute))
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", j.ID(), j.Slots, times)
 	}
@@ -105,7 +108,7 @@ func newGitHub(creds string, client *http.Client) (*GitHub, error) {
 		return nil, err
 	}
 	return &GitHub{
-		API: "https://api.github.com", AppID: appID, Org: "katoptra", Key: key,
+		API: "https://api.github.com", AppID: appID, Owner: "jshvn", Key: key,
 		HTTP: client, Sleep: time.Sleep, Now: time.Now,
 	}, nil
 }

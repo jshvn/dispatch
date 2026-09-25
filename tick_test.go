@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/katoptra/dispatch/schedules"
+	"github.com/jshvn/dispatch/schedules"
 )
 
 var (
-	ctan  = schedules.Job{Repo: "katoptra/ctan", File: "sync.yml", Slots: schedules.Hourly}
-	tlnet = schedules.Job{Repo: "katoptra/tlnet", File: "sync.yml", Slots: schedules.Evening}
+	hourly  = schedules.Job{Repo: "jshvn/hourly", File: "sync.yml", Slots: schedules.Hourly}
+	evening = schedules.Job{Repo: "jshvn/evening", File: "sync.yml", Slots: schedules.Evening}
 )
 
 func utc(s string) time.Time {
@@ -65,23 +65,23 @@ func tick(t *testing.T, dir string, jobs []schedules.Job, now string, d Dispatch
 
 func TestCatchUpFiresOnceForTheLatestSlot(t *testing.T) {
 	dir := t.TempDir()
-	must(t, SaveState(dir, State{ctan.ID(): utc("2026-09-21T02:42:00Z")}))
+	must(t, SaveState(dir, State{hourly.ID(): utc("2026-09-21T02:42:00Z")}))
 	f := &fake{dir: dir}
-	log, _ := tick(t, dir, []schedules.Job{ctan}, "2026-09-21T12:50:00Z", f, false)
+	log, _ := tick(t, dir, []schedules.Job{hourly}, "2026-09-21T12:50:00Z", f, false)
 	if len(log.Errors()) != 0 || len(f.calls) != 1 {
 		t.Fatalf("ten missed slots: calls %v, errors %v; want one call, no errors", f.calls, log.Errors())
 	}
 	s, _ := LoadState(dir)
-	if !s[ctan.ID()].Equal(utc("2026-09-21T12:42:00Z")) {
-		t.Errorf("recorded %v, want the latest slot 12:42", s[ctan.ID()])
+	if !s[hourly.ID()].Equal(utc("2026-09-21T12:42:00Z")) {
+		t.Errorf("recorded %v, want the latest slot 12:42", s[hourly.ID()])
 	}
 }
 
 func TestSameSlotNeverFiresTwice(t *testing.T) {
 	dir := t.TempDir()
 	f := &fake{dir: dir}
-	tick(t, dir, []schedules.Job{ctan}, "2026-09-21T12:42:30Z", f, false)
-	tick(t, dir, []schedules.Job{ctan}, "2026-09-21T12:57:00Z", f, false)
+	tick(t, dir, []schedules.Job{hourly}, "2026-09-21T12:42:30Z", f, false)
+	tick(t, dir, []schedules.Job{hourly}, "2026-09-21T12:57:00Z", f, false)
 	if len(f.calls) != 1 {
 		t.Errorf("calls %v; want one dispatch for slot 12:42", f.calls)
 	}
@@ -89,21 +89,21 @@ func TestSameSlotNeverFiresTwice(t *testing.T) {
 
 func TestSlotIsRecordedBeforeTheDispatch(t *testing.T) {
 	dir := t.TempDir()
-	f := &fake{dir: dir, fail: map[string]bool{ctan.ID(): true}}
-	log, _ := tick(t, dir, []schedules.Job{ctan, tlnet}, "2026-09-21T12:45:00Z", f, false)
+	f := &fake{dir: dir, fail: map[string]bool{hourly.ID(): true}}
+	log, _ := tick(t, dir, []schedules.Job{hourly, evening}, "2026-09-21T12:45:00Z", f, false)
 	if len(f.seen) != 2 {
 		t.Fatalf("calls %v; want both jobs dispatched though the first failed", f.calls)
 	}
 	for _, s := range f.seen {
-		if !s[ctan.ID()].Equal(utc("2026-09-21T12:42:00Z")) || !s[tlnet.ID()].Equal(utc("2026-09-21T05:42:00Z")) {
+		if !s[hourly.ID()].Equal(utc("2026-09-21T12:42:00Z")) || !s[evening.ID()].Equal(utc("2026-09-21T05:42:00Z")) {
 			t.Errorf("state during dispatch %v; want both slots already recorded", s)
 		}
 	}
-	if errs := log.Errors(); len(errs) != 1 || !strings.Contains(errs[0], ctan.ID()) {
-		t.Errorf("errors %v; want one naming %s", errs, ctan.ID())
+	if errs := log.Errors(); len(errs) != 1 || !strings.Contains(errs[0], hourly.ID()) {
+		t.Errorf("errors %v; want one naming %s", errs, hourly.ID())
 	}
 	f.fail = nil
-	tick(t, dir, []schedules.Job{ctan, tlnet}, "2026-09-21T12:50:00Z", f, false)
+	tick(t, dir, []schedules.Job{hourly, evening}, "2026-09-21T12:50:00Z", f, false)
 	if len(f.calls) != 2 {
 		t.Errorf("calls %v; a failed dispatch's slot must not be retried", f.calls)
 	}
@@ -112,7 +112,7 @@ func TestSlotIsRecordedBeforeTheDispatch(t *testing.T) {
 func TestPrepareFailureRecordsNothing(t *testing.T) {
 	dir := t.TempDir()
 	f := &fake{dir: dir, prepErr: errors.New("installation token: 503")}
-	log, _ := tick(t, dir, []schedules.Job{ctan}, "2026-09-21T12:45:00Z", f, false)
+	log, _ := tick(t, dir, []schedules.Job{hourly}, "2026-09-21T12:45:00Z", f, false)
 	if len(f.calls) != 0 || len(log.Errors()) != 1 {
 		t.Errorf("calls %v, errors %v; want no dispatch and one error", f.calls, log.Errors())
 	}
@@ -120,7 +120,7 @@ func TestPrepareFailureRecordsNothing(t *testing.T) {
 		t.Error("a failed prepare recorded the slot")
 	}
 	f.prepErr = nil
-	tick(t, dir, []schedules.Job{ctan}, "2026-09-21T12:50:00Z", f, false)
+	tick(t, dir, []schedules.Job{hourly}, "2026-09-21T12:50:00Z", f, false)
 	if len(f.calls) != 1 {
 		t.Errorf("calls %v; the next tick must fire the slot the failed prepare left", f.calls)
 	}
@@ -128,9 +128,9 @@ func TestPrepareFailureRecordsNothing(t *testing.T) {
 
 func TestNothingDuePreparesNothing(t *testing.T) {
 	dir := t.TempDir()
-	must(t, SaveState(dir, State{ctan.ID(): utc("2026-09-21T12:42:00Z")}))
+	must(t, SaveState(dir, State{hourly.ID(): utc("2026-09-21T12:42:00Z")}))
 	f := &fake{dir: dir}
-	tick(t, dir, []schedules.Job{ctan}, "2026-09-21T12:50:00Z", f, false)
+	tick(t, dir, []schedules.Job{hourly}, "2026-09-21T12:50:00Z", f, false)
 	if f.prepared != 0 {
 		t.Error("a tick with nothing due minted a token")
 	}
@@ -141,7 +141,7 @@ func TestCorruptStateFiresNothing(t *testing.T) {
 		dir := t.TempDir()
 		must(t, os.WriteFile(filepath.Join(dir, stateFile), []byte(bad), 0o600))
 		f := &fake{dir: dir}
-		log, _ := tick(t, dir, []schedules.Job{ctan}, "2026-09-21T12:45:00Z", f, false)
+		log, _ := tick(t, dir, []schedules.Job{hourly}, "2026-09-21T12:45:00Z", f, false)
 		if len(f.calls) != 0 || len(log.Errors()) != 1 {
 			t.Errorf("state %q: calls %v, errors %v; want no calls and one error", bad, f.calls, log.Errors())
 		}
@@ -154,9 +154,9 @@ func TestCorruptStateFiresNothing(t *testing.T) {
 
 func TestClockBehindStateWarnsAndSkips(t *testing.T) {
 	dir := t.TempDir()
-	must(t, SaveState(dir, State{ctan.ID(): utc("2026-09-21T14:42:00Z")}))
+	must(t, SaveState(dir, State{hourly.ID(): utc("2026-09-21T14:42:00Z")}))
 	f := &fake{dir: dir}
-	log, out := tick(t, dir, []schedules.Job{ctan}, "2026-09-21T12:45:00Z", f, false)
+	log, out := tick(t, dir, []schedules.Job{hourly}, "2026-09-21T12:45:00Z", f, false)
 	if len(f.calls) != 0 || len(log.Errors()) != 0 || !strings.Contains(out, "clock") {
 		t.Errorf("calls %v, errors %v, output %q; want a clock warning and nothing else", f.calls, log.Errors(), out)
 	}
@@ -164,19 +164,19 @@ func TestClockBehindStateWarnsAndSkips(t *testing.T) {
 
 func TestRemovedJobIsDroppedFromState(t *testing.T) {
 	dir := t.TempDir()
-	must(t, SaveState(dir, State{"katoptra/gone/sync.yml": utc("2026-09-01T00:42:00Z")}))
-	tick(t, dir, []schedules.Job{ctan}, "2026-09-21T12:45:00Z", &fake{dir: dir}, false)
+	must(t, SaveState(dir, State{"jshvn/gone/sync.yml": utc("2026-09-01T00:42:00Z")}))
+	tick(t, dir, []schedules.Job{hourly}, "2026-09-21T12:45:00Z", &fake{dir: dir}, false)
 	s, _ := LoadState(dir)
-	if _, ok := s["katoptra/gone/sync.yml"]; ok || len(s) != 1 {
-		t.Errorf("state %v; want only %s", s, ctan.ID())
+	if _, ok := s["jshvn/gone/sync.yml"]; ok || len(s) != 1 {
+		t.Errorf("state %v; want only %s", s, hourly.ID())
 	}
 }
 
 func TestDryRunChangesNothing(t *testing.T) {
 	dir := t.TempDir()
 	f := &fake{dir: dir}
-	_, out := tick(t, dir, []schedules.Job{ctan}, "2026-09-21T12:45:00Z", f, true)
-	if len(f.calls) != 0 || !strings.Contains(out, ctan.ID()) {
+	_, out := tick(t, dir, []schedules.Job{hourly}, "2026-09-21T12:45:00Z", f, true)
+	if len(f.calls) != 0 || !strings.Contains(out, hourly.ID()) {
 		t.Errorf("calls %v, output %q; want the due job printed and nothing dispatched", f.calls, out)
 	}
 	if _, err := os.Stat(filepath.Join(dir, stateFile)); !errors.Is(err, os.ErrNotExist) {

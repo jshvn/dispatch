@@ -37,7 +37,7 @@ func github(t *testing.T, dispatch ...int) (*GitHub, *[]string, *[]time.Duration
 		body, _ := io.ReadAll(r.Body)
 		hits = append(hits, r.Method+" "+r.URL.Path)
 		switch {
-		case r.URL.Path == "/orgs/katoptra/installation":
+		case r.URL.Path == "/users/jshvn/installation":
 			w.Write([]byte(`{"id":42}`))
 		case r.URL.Path == "/app/installations/42/access_tokens" && r.Method == "POST":
 			w.WriteHeader(201)
@@ -60,7 +60,7 @@ func github(t *testing.T, dispatch ...int) (*GitHub, *[]string, *[]time.Duration
 	}))
 	t.Cleanup(srv.Close)
 	g := &GitHub{
-		API: srv.URL, AppID: "123", Org: "katoptra", Key: testKey, HTTP: srv.Client(),
+		API: srv.URL, AppID: "123", Owner: "jshvn", Key: testKey, HTTP: srv.Client(),
 		Sleep: func(d time.Duration) { slept = append(slept, d) }, Now: time.Now,
 	}
 	return g, &hits, &slept
@@ -69,13 +69,13 @@ func github(t *testing.T, dispatch ...int) (*GitHub, *[]string, *[]time.Duration
 func TestDispatchMintsOnceAndDispatches(t *testing.T) {
 	g, hits, _ := github(t)
 	ctx := context.Background()
-	must(t, g.Dispatch(ctx, "katoptra/ctan", "sync.yml"))
-	must(t, g.Dispatch(ctx, "katoptra/tlnet", "sync.yml"))
+	must(t, g.Dispatch(ctx, "jshvn/apartments", "sync.yml"))
+	must(t, g.Dispatch(ctx, "jshvn/terraform", "sync.yml"))
 	want := []string{
-		"GET /orgs/katoptra/installation",
+		"GET /users/jshvn/installation",
 		"POST /app/installations/42/access_tokens",
-		"POST /repos/katoptra/ctan/actions/workflows/sync.yml/dispatches",
-		"POST /repos/katoptra/tlnet/actions/workflows/sync.yml/dispatches",
+		"POST /repos/jshvn/apartments/actions/workflows/sync.yml/dispatches",
+		"POST /repos/jshvn/terraform/actions/workflows/sync.yml/dispatches",
 	}
 	if strings.Join(*hits, "\n") != strings.Join(want, "\n") {
 		t.Errorf("requests\n%s\nwant\n%s", strings.Join(*hits, "\n"), strings.Join(want, "\n"))
@@ -84,7 +84,7 @@ func TestDispatchMintsOnceAndDispatches(t *testing.T) {
 
 func TestTransientStatusIsRetried(t *testing.T) {
 	g, hits, slept := github(t, 408, 429)
-	must(t, g.Dispatch(context.Background(), "katoptra/ctan", "sync.yml"))
+	must(t, g.Dispatch(context.Background(), "jshvn/apartments", "sync.yml"))
 	if len(*hits) != 5 || len(*slept) != 2 || (*slept)[0] != 10*time.Second || (*slept)[1] != 20*time.Second {
 		t.Errorf("hits %v, slept %v; want three dispatch attempts after 10s and 20s", *hits, *slept)
 	}
@@ -92,7 +92,7 @@ func TestTransientStatusIsRetried(t *testing.T) {
 
 func TestServerErrorOnDispatchIsNotRetried(t *testing.T) {
 	g, hits, slept := github(t, 502)
-	err := g.Dispatch(context.Background(), "katoptra/ctan", "sync.yml")
+	err := g.Dispatch(context.Background(), "jshvn/apartments", "sync.yml")
 	if err == nil || len(*slept) != 0 || len(*hits) != 3 {
 		t.Errorf("err %v, hits %v; a 502 may follow an accepted dispatch, so no retry", err, *hits)
 	}
@@ -101,7 +101,7 @@ func TestServerErrorOnDispatchIsNotRetried(t *testing.T) {
 func TestUnopenedConnectionIsRetried(t *testing.T) {
 	g, _, slept := github(t)
 	g.API, g.token = "http://127.0.0.1:1", "ghs_test"
-	if err := g.Dispatch(context.Background(), "katoptra/ctan", "sync.yml"); err == nil || len(*slept) != 3 {
+	if err := g.Dispatch(context.Background(), "jshvn/apartments", "sync.yml"); err == nil || len(*slept) != 3 {
 		t.Errorf("err %v, slept %v; a refused connection never reached GitHub, so three retries", err, *slept)
 	}
 }
@@ -133,7 +133,7 @@ func TestRetryStopsAtTheDeadline(t *testing.T) {
 	g.Now = func() time.Time { return start }
 	ctx, cancel := context.WithDeadline(context.Background(), start.Add(15*time.Second))
 	defer cancel()
-	err := g.Dispatch(ctx, "katoptra/ctan", "sync.yml")
+	err := g.Dispatch(ctx, "jshvn/apartments", "sync.yml")
 	if err == nil || len(*slept) != 1 {
 		t.Errorf("err %v, slept %v; want the 10s retry and not the 20s one past the deadline", err, *slept)
 	}
@@ -141,7 +141,7 @@ func TestRetryStopsAtTheDeadline(t *testing.T) {
 
 func TestRetriesRunOut(t *testing.T) {
 	g, _, slept := github(t, 429, 429, 429, 429)
-	err := g.Dispatch(context.Background(), "katoptra/ctan", "sync.yml")
+	err := g.Dispatch(context.Background(), "jshvn/apartments", "sync.yml")
 	if err == nil || len(*slept) != 3 {
 		t.Errorf("err %v, slept %v; want failure after three retries", err, *slept)
 	}
@@ -149,7 +149,7 @@ func TestRetriesRunOut(t *testing.T) {
 
 func TestClientErrorIsFatal(t *testing.T) {
 	g, _, slept := github(t, 404)
-	err := g.Dispatch(context.Background(), "katoptra/ctan", "sync.yml")
+	err := g.Dispatch(context.Background(), "jshvn/apartments", "sync.yml")
 	if err == nil || !strings.Contains(err.Error(), "404") || len(*slept) != 0 {
 		t.Errorf("err %v, slept %v; want an immediate 404", err, *slept)
 	}
@@ -157,7 +157,7 @@ func TestClientErrorIsFatal(t *testing.T) {
 
 func TestPrepareFailsWithoutAnInstallation(t *testing.T) {
 	g, hits, _ := github(t)
-	g.Org = "nobody"
+	g.Owner = "nobody"
 	if err := g.Prepare(context.Background()); err == nil || len(*hits) != 1 {
 		t.Errorf("err %v, hits %v; want one refused installation lookup", err, *hits)
 	}

@@ -1,33 +1,26 @@
-<p align="center">
-  <a href="https://github.com/katoptra">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://katoptra.org/brand/katoptra-mark-dark-224.png">
-      <img src="https://katoptra.org/brand/katoptra-mark-224.png" alt="Katoptra" width="112">
-    </picture>
-  </a>
-</p>
-
 <h1 align="center">dispatch</h1>
 
-<p align="center">The scheduler that starts every katoptra mirror.</p>
+<p align="center">The scheduler that starts the workflows in my own repositories.</p>
 
 <p align="center">
-  <a href="https://github.com/katoptra/dispatch/actions/workflows/check.yml"><img src="https://github.com/katoptra/dispatch/actions/workflows/check.yml/badge.svg" alt="check"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/katoptra/dispatch" alt="license"></a>
-  <a href="https://github.com/katoptra/dispatch#how-it-works"><img src="https://healthchecks.io/b/2/254c8ab8-5b1c-40e5-ae69-f34413b6b053.svg" alt="tick"></a>
+  <a href="https://github.com/jshvn/dispatch/actions/workflows/check.yml"><img src="https://github.com/jshvn/dispatch/actions/workflows/check.yml/badge.svg" alt="check"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/jshvn/dispatch" alt="license"></a>
 </p>
 
-No mirror schedules itself; each waits
-for a `workflow_dispatch`, and this repository sends it. A systemd timer on a NixOS host
-ticks every five minutes, fires each job whose latest slot has not been fired yet, then
-pings one healthcheck. A host that was down fires each missed job once, for the latest
-of its slots, when it comes back. No slot fires twice. It is one Go binary with no
-dependency outside the standard library, and it runs on a one-core VPS.
+No workflow here schedules itself; each waits for a `workflow_dispatch`, and this
+repository sends it. A systemd timer on a NixOS host ticks every five minutes, fires each
+job whose latest slot has not been fired yet, then pings one healthcheck. A host that was
+down fires each missed job once, for the latest of its slots, when it comes back. No slot
+fires twice. It is one Go binary with no dependency outside the standard library, and it
+runs on a one-core VPS.
+
+It is a copy of [katoptra/dispatch](https://github.com/katoptra/dispatch), which does the
+same for the katoptra mirrors, pointed at the `jshvn` account and with per-job jitter.
 
 ## How to use
 
-A job is one workflow in one katoptra repository and the UTC hours it runs at. Every
-slot fires at `HH:42`:
+A job is one workflow in one jshvn repository and the UTC hours it runs at. Every slot
+fires at `HH:42`:
 
 | Slot | UTC | Pacific, winter |
 |---|---|---|
@@ -42,11 +35,15 @@ slot fires at `HH:42`:
 the half of `owner/name` after the slash:
 
 ```go
-// schedules/ctan.go
-var _ = register(Job{Repo: "katoptra/ctan", File: "sync.yml", Slots: Hourly})
+// schedules/terraform.go
+var _ = register(Job{Repo: "jshvn/terraform", File: "drift.yml", Slots: Evening})
 ```
 
 Two slots are `Morning | Evening`. A misspelt slot fails to compile.
+
+A job with `Jitter: 30 * time.Minute` fires each slot up to half an hour late, a different
+wait every slot, so its runs do not land on a clock. The wait is drawn from the job and the
+slot, so every tick agrees on it, and it rounds up to the next five-minute tick.
 
 The workflow must hold up three things this repository cannot check. A workflow that
 fails any of them is dispatched into silence:
@@ -54,10 +51,12 @@ fails any of them is dispatched into silence:
 1. It declares `workflow_dispatch:` in `on:`.
 2. It declares a `concurrency` group with `cancel-in-progress: false`, so a dispatch that
    arrives during a run queues instead of doubling up.
-3. It pings its own healthcheck. The scheduler never learns whether a run passed.
+3. It pings its own healthcheck, or its file in `schedules/` says what alerts instead.
+   The scheduler never learns whether a run passed.
 
-A change reaches the host when the host's flake lock moves to the new commit. A new job
-fires at the next tick, for its latest slot.
+The App must be installed on the repository too; a repository it cannot see answers the
+dispatch with 404. A change reaches the host when the host's flake lock moves to the new
+commit. A new job fires at the next tick, for its latest slot.
 
 ## How it works
 
@@ -95,16 +94,17 @@ The files, the constraints and the reasoning behind each choice are in
 
 ### 1. Fork it
 
-Fork [katoptra/dispatch](https://github.com/katoptra/dispatch) and replace the files in
-[`schedules/`](schedules) with your own jobs. The package's test refuses a job outside a
-`katoptra/` repository; change that prefix to your organization's.
+Fork this repository and replace the files in [`schedules/`](schedules) with your own
+jobs. The package's test refuses a job outside a `jshvn/` repository; change that prefix,
+and `Owner` in `main.go`, to your account's. The installation is looked up on a user
+account; for an organization, fork [katoptra/dispatch](https://github.com/katoptra/dispatch),
+which looks it up on an org.
 
 ### 2. The GitHub App
 
-1. Create an App owned by your organization: Repository permissions, Actions, Read and
-   write, and nothing else; no webhook.
-2. Install it on the organization with access to all repositories, so a new repository
-   is covered without another step.
+1. Create an App owned by your account: Repository permissions, Actions, Read and write,
+   and nothing else; no webhook.
+2. Install it on the account with access to the repositories it runs.
 3. Note the App ID and generate a private key. The key is used as GitHub issues it; no
    conversion.
 
@@ -119,12 +119,12 @@ its own business; they are read through `LoadCredential=`, so root-owned 0400 fi
 
 ```nix
 {
-  imports = [ inputs.katoptra-dispatch.nixosModules.default ];
-  services.katoptra-dispatch = {
+  imports = [ inputs.jshvn-dispatch.nixosModules.default ];
+  services.jshvn-dispatch = {
     enable = true;
-    appIdFile = "/run/secrets/dispatch-app-id";
-    privateKeyFile = "/run/secrets/dispatch-private-key";
-    healthcheckUrlFile = "/run/secrets/dispatch-healthcheck-url";
+    appIdFile = "/run/secrets/jshvn-dispatch-app-id";
+    privateKeyFile = "/run/secrets/jshvn-dispatch-private-key";
+    healthcheckUrlFile = "/run/secrets/jshvn-dispatch-healthcheck-url";
   };
 }
 ```
@@ -142,7 +142,7 @@ task targets  # every job and its UTC slot times, read from schedules/
 
 `nix flake check` builds the package and renders the two units; [`CLAUDE.md`](CLAUDE.md)
 has the command for a laptop without nix. Only a real tick proves the App: on the host,
-`sudo systemctl start katoptra-dispatch` and read the journal.
+`sudo systemctl start jshvn-dispatch` and read the journal.
 
 ## Operating it
 
@@ -157,11 +157,11 @@ task runs LIMIT=10     # more of them
 Every run a target shows as `workflow_dispatch` came from here. On the host:
 
 ```sh
-systemctl list-timers katoptra-dispatch.timer
-journalctl -u katoptra-dispatch -n 50
-journalctl -u katoptra-dispatch -p err
-sudo cat /var/lib/private/katoptra-dispatch/state.json
-sudo STATE_DIRECTORY=/var/lib/private/katoptra-dispatch katoptra-dispatch --dry-run
+systemctl list-timers jshvn-dispatch.timer
+journalctl -u jshvn-dispatch -n 50
+journalctl -u jshvn-dispatch -p err
+sudo cat /var/lib/private/jshvn-dispatch/state.json
+sudo STATE_DIRECTORY=/var/lib/private/jshvn-dispatch jshvn-dispatch --dry-run
 ```
 
 `--dry-run` prints what is due and why, and writes, dispatches and pings nothing.
@@ -169,10 +169,11 @@ sudo STATE_DIRECTORY=/var/lib/private/katoptra-dispatch katoptra-dispatch --dry-
 - **The healthcheck goes quiet.** The host or its timer is down. Nothing is lost: when it
   comes back, the next tick fires every job that missed a slot, once.
 - **A tick pings `/fail`.** The error text is in the ping's body and in
-  `journalctl -u katoptra-dispatch -p err`. The slot it failed on is gone; the job's next
+  `journalctl -u jshvn-dispatch -p err`. The slot it failed on is gone; the job's next
   slot is the retry.
 - **A dispatch answers 404.** Every dispatch is to `ref: main`, so the repository's
-  default branch is not `main`, or the workflow file is not there.
+  default branch is not `main`, the workflow file is not there, or the App is not
+  installed on the repository.
 - **Every tick fails on `state.json`.** A corrupt state file stops everything, since
   empty state would fire every job again. Repair it by hand, or delete it: every job then
   fires once.
@@ -181,7 +182,5 @@ sudo STATE_DIRECTORY=/var/lib/private/katoptra-dispatch katoptra-dispatch --dry-
 
 [`CLAUDE.md`](CLAUDE.md) is the design: the files, the constraints, and what breaks if a
 choice is undone.
-
-Pull requests are welcome.
 
 MIT licensed. Built by [Josh Vaughen](https://ijosh.com).
