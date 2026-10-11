@@ -152,7 +152,7 @@ sudo STATE_DIRECTORY=/var/lib/private/jshvn-dispatch jshvn-dispatch --dry-run
    Keep the paths as strings. A Nix path would copy the secrets into the Nix store, where
    anyone on the host can read them. The files are loaded with `LoadCredential=`, so
    root-owned files with mode 0400 work.
-5. **Check it.** On a laptop with go-task and Docker or Apple `container`, run `task check`
+5. **Check it.** On a laptop with go-task, jq and Docker or Apple `container`, run `task check`
    and `task targets`. `nix flake check` builds the package and the systemd units;
    [`CLAUDE.md`](CLAUDE.md) shows how to run it without nix installed. The only real test
    of the App is a live tick: run `sudo systemctl start jshvn-dispatch` on the host and
