@@ -3,8 +3,11 @@
 # The host picks up a change when jshvn/jgrid.net bumps this flake in its lock.
 #
 # Every Go command runs inside the toolbox image (Dockerfile), so the host supplies a
-# container engine and go-task and nothing else. The design is CLAUDE.md.
+# container engine, go-task and jq (the menu check) and nothing else. The design is CLAUDE.md.
 version: '3'
+
+set: [errexit, pipefail]
+silent: true
 
 vars:
   ENGINE:
@@ -20,38 +23,46 @@ vars:
   QUIET: '{{if eq .ENGINE "container"}}--progress none{{end}}'
 
 tasks:
-  # The menu. ponytail: hand-maintained listing -- go-task can neither group nor annotate,
-  # so a new task means a line below. `task --list` stays the generated view.
   default:
     desc: Print the menu
-    silent: true
+    # ponytail: hand-maintained listing -- go-task can neither group nor annotate, so a new
+    # task means a row below; menu-drift fails until it has one. `task --list` stays the
+    # generated view.
     cmds:
       - |
-        b=$(printf '\033[1m'); c=$(printf '\033[1;36m'); d=$(printf '\033[2m'); r=$(printf '\033[0m')
-        printf '%s\n' \
-          "" \
-          "${b}jshvn-dispatch${r}   ${d}starts my own repos' workflows on UTC slots, from a systemd timer${r}" \
-          "" \
-          "${c}read -- looks, changes nothing${r}" \
-          "  task targets      Every job and its UTC slot times, read from schedules/" \
-          "  task runs         Recent runs of each target on GitHub, as a table ${d}(LIMIT=3)${r}" \
-          "                    ${d}needs gh logged in; every run should say workflow_dispatch${r}" \
-          "" \
-          "${c}checks -- offline, no credentials, inside the toolbox image${r}" \
-          "  task check        Everything CI runs: gofmt, go vet, go test" \
-          "  task fmt          gofmt -w in place" \
-          "  ${d}nix flake check is the host-side proof; it needs nix, see CLAUDE.md${r}" \
-          "" \
-          "${c}toolbox${r}" \
-          "  task run -- <cmd> Run any command in the image with the repo mounted" \
-          "  task image        Build the image ${d}(skipped when it exists)${r}" \
-          "  task clean        Remove the image and the Go build cache ${d}(after a Dockerfile edit)${r}" \
-          ""
+        b= c= d= r=
+        if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+          b=$(printf '\033[1m'); c=$(printf '\033[1;36m'); d=$(printf '\033[2m'); r=$(printf '\033[0m')
+        fi
+        group() { printf '\n%s   %s\n' "$c$1$r" "$d$2$r"; }
+        row() {
+          if [ ${#1} -le 26 ]; then printf '  %-26s %s\n' "$1" "$2"
+          else printf '  %s\n  %-26s %s\n' "$1" '' "$2"; fi
+          [ -z "${3:-}" ] || note "$3"
+        }
+        note() { printf '  %-26s %s\n' '' "$d$1$r"; }
+
+        printf '\n%s   %s\n' "${b}dispatch${r}" "${d}starts my own repos' workflows on UTC slots, from a systemd timer${r}"
+
+        group read 'looks at schedules/ and GitHub, changes nothing'
+        row 'task targets' 'Every job and its UTC slot times, read from schedules/'
+        row 'task runs' 'Recent runs of each target on GitHub, as a table' 'LIMIT=<n> runs each, 3 by default'
+        note 'needs gh logged in; every run should say workflow_dispatch'
+
+        group checks 'offline, no credentials, inside the toolbox image'
+        row 'task check' 'Everything CI runs: gofmt, go vet, go test, this menu'
+        note 'nix flake check is the host-side proof; it needs nix, see CLAUDE.md'
+        row 'task fmt' 'gofmt -w in place'
+
+        group toolbox '{{.ENGINE}}, {{.IMAGE}}, built from the Dockerfile'
+        row 'task image' 'Build the image' 'skipped when it exists'
+        row 'task run -- <cmd>' 'Run any command in the image with the repo mounted'
+        row 'task clean' 'Remove the image and the Go build cache' 'after a Dockerfile edit'
+        echo
 
   run:
     desc: 'Run any command in the toolbox image, e.g. task run -- go test ./...'
     deps: [image]
-    silent: true
     cmds:
       - >-
         {{.ENGINE}} run {{.QUIET}} --rm -i $(test -t 0 && test -t 1 && echo -t || true)
@@ -63,7 +74,6 @@ tasks:
   image:
     desc: Build the toolbox image
     run: once
-    silent: true
     # Presence is the freshness check, so a Dockerfile edit does not rebuild on its own:
     # task clean, then any task.
     status:
@@ -72,8 +82,10 @@ tasks:
       - '{{.ENGINE}} build -t {{.IMAGE}} .'
 
   check:
-    desc: Everything CI runs - gofmt, go vet, go test
+    desc: Everything CI runs - gofmt, go vet, go test, and this menu against the tasks
     cmds:
+      # on the host: the toolbox image has neither task nor jq
+      - task: menu-drift
       - task: run
         vars:
           CLI_ARGS: >-
@@ -88,14 +100,12 @@ tasks:
 
   targets:
     desc: Every job and its UTC slot times, read from schedules/
-    silent: true
     cmds:
       - task: run
         vars: {CLI_ARGS: go run . --list}
 
   runs:
     desc: Recent runs of each target on GitHub, as a table - workflow_dispatch ones came from here
-    silent: true
     vars:
       LIMIT: '{{.LIMIT | default 3}}'
     cmds:
@@ -120,3 +130,18 @@ tasks:
     cmds:
       - '{{.ENGINE}} image rm {{.IMAGE}} >/dev/null 2>&1 || true'
       - rm -rf .cache
+
+  # Every public task has a desc and a menu row, and every row names a task. default and
+  # help are the menu itself. Needs task and jq wherever lint runs.
+  menu-drift:
+    internal: true
+    cmds:
+      - |
+        rows=$(grep -oE "row ['\"]task [^ '\"]+" '{{.ROOT_TASKFILE}}' | sed -E "s/^row ['\"]task //" || true)
+        bad=$(task -t '{{.ROOT_TASKFILE}}' --list-all --json --no-status | jq -r --arg rows "$rows" '
+          ($rows | split("\n") | map(select(. != ""))) as $r
+          | [.tasks[] | select(.task != "default" and .task != "help")] as $t
+          | ($t[] | select(.desc == "") | "task \(.task): no desc; describe it or mark it internal"),
+            ($t[] | select(.task | IN($r[]) | not) | "task \(.task): no row in the menu"),
+            ($r[] | select(IN($t[].task) | not) | "row task \(.): no such task")')
+        [ -z "$bad" ] || { printf '%s\n' "$bad" >&2; exit 1; }
