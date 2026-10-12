@@ -42,7 +42,7 @@ tasks:
         }
         note() { printf '  %-26s %s\n' '' "$d$1$r"; }
 
-        printf '\n%s   %s\n' "${b}dispatch${r}" "${d}starts my own repos' workflows on UTC slots, from a systemd timer${r}"
+        printf '\n%s   %s\n' "${b}jshvn/dispatch${r}" "${d}starts my own repos' workflows on UTC slots, from a systemd timer${r}"
 
         group read 'looks at schedules/ and GitHub, changes nothing'
         row 'task targets' 'Every job and its UTC slot times, read from schedules/'
